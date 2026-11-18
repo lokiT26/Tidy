@@ -1,12 +1,12 @@
 package com.lokesh.tidy.ui.screens
 
 import androidx.compose.animation.*
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -17,10 +17,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -33,14 +34,16 @@ import com.lokesh.tidy.ui.Dates
 import com.lokesh.tidy.ui.components.*
 import com.lokesh.tidy.ui.theme.Palette
 import com.lokesh.tidy.ui.theme.tidy
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.YearMonth
-import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CalendarScreen(
     tasks: List<TaskWithSubtasks>,
@@ -49,18 +52,65 @@ fun CalendarScreen(
     onSelect: (LocalDate) -> Unit,
     onToggle: (Task) -> Unit,
     onOpen: (TaskWithSubtasks) -> Unit,
+    onDelete: (TaskWithSubtasks) -> Unit,
     onSubtask: (Subtask) -> Unit,
+    onReorder: (List<Task>) -> Unit,
 ) {
     val t = tidy
+    val haptic = LocalHapticFeedback.current
     var monthView by rememberSaveable { mutableStateOf(false) }
     val catMap = remember(categories) { categories.associateBy { it.id } }
     val byDay = remember(tasks) { tasks.filter { it.task.dueDate != null }.groupBy { it.task.dueDate!! } }
-    val dayTasks = (byDay[selected.toEpochDay()] ?: emptyList()).sortedWith(compareBy({ it.task.completed }, { it.task.dueTime ?: -1 }, { it.task.sortOrder }))
-    val allDay = dayTasks.filter { it.task.dueTime == null }
-    val timed = dayTasks.filter { it.task.dueTime != null }.sortedBy { it.task.dueTime }
+    val dayTasks = remember(byDay, selected) {
+        (byDay[selected.toEpochDay()] ?: emptyList()).sortedWith(
+            compareBy<TaskWithSubtasks> { it.task.completed }
+                .thenBy { it.task.dueTime ?: -1 }
+                .thenBy { it.task.sortOrder }
+                .thenByDescending { it.task.completedAt ?: 0L }
+        )
+    }
+    val computedAllDay = remember(dayTasks) { dayTasks.filter { it.task.dueTime == null } }
+    val computedTimed = remember(dayTasks) { dayTasks.filter { it.task.dueTime != null } }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 140.dp)) {
-        item {
+    var allDay by remember { mutableStateOf(computedAllDay) }
+    var timed by remember { mutableStateOf(computedTimed) }
+    var activeGroup by remember { mutableStateOf<String?>(null) }
+    var activeTime by remember { mutableStateOf<Int?>(null) }
+
+    LaunchedEffect(computedAllDay, computedTimed) {
+        if (activeGroup == null) {
+            allDay = computedAllDay
+            timed = computedTimed
+        }
+    }
+
+    val listState = rememberLazyListState()
+    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+        val fk = from.key as? String ?: return@rememberReorderableLazyListState
+        val tk = to.key as? String ?: return@rememberReorderableLazyListState
+        if (fk.startsWith("a_") && tk.startsWith("a_")) {
+            val fi = allDay.indexOfFirst { "a_${it.task.id}" == fk }
+            val ti = allDay.indexOfFirst { "a_${it.task.id}" == tk }
+            if (fi >= 0 && ti >= 0 && !allDay[fi].task.completed && !allDay[ti].task.completed) {
+                allDay = allDay.toMutableList().apply { add(ti, removeAt(fi)) }
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+        } else if (fk.startsWith("t_") && tk.startsWith("t_")) {
+            val fi = timed.indexOfFirst { "t_${it.task.id}" == fk }
+            val ti = timed.indexOfFirst { "t_${it.task.id}" == tk }
+            if (fi >= 0 && ti >= 0 && !timed[fi].task.completed && !timed[ti].task.completed && timed[fi].task.dueTime == timed[ti].task.dueTime) {
+                timed = timed.toMutableList().apply { add(ti, removeAt(fi)) }
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+        }
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 140.dp),
+    ) {
+        item(key = "header") {
             Row(Modifier.fillMaxWidth().statusBarsPadding().padding(top = 18.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(selected.year.toString(), style = MaterialTheme.typography.labelLarge, color = t.textMuted)
@@ -71,7 +121,7 @@ fun CalendarScreen(
                 IconBubble(Icons.Rounded.ChevronRight, { onSelect(if (monthView) selected.plusMonths(1) else selected.plusWeeks(1)) })
             }
         }
-        item {
+        item(key = "calendar_card") {
             Column(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(t.card).padding(12.dp)
                     .pointerInput(monthView, selected) {
@@ -115,7 +165,7 @@ fun CalendarScreen(
                 }
             }
         }
-        item {
+        item(key = "day_title") {
             Row(Modifier.padding(top = 22.dp, bottom = 8.dp, start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(if (selected == LocalDate.now()) "Today" else Dates.short(selected), style = MaterialTheme.typography.titleLarge, color = t.text)
                 Spacer(Modifier.width(10.dp))
@@ -123,34 +173,103 @@ fun CalendarScreen(
             }
         }
         if (dayTasks.isEmpty()) {
-            item { EmptyState("🗓️", "A free day", "Tap + to plan something here") }
+            item(key = "empty") { EmptyState("🗓️", "A free day", "Tap + to plan something here") }
         }
         if (allDay.isNotEmpty()) {
-            item { SectionHeader("All day", allDay.size) }
-            items(allDay, key = { "a" + it.task.id }) {
-                TaskCard(it, it.task.categoryId?.let(catMap::get), { onToggle(it.task) }, { onOpen(it) }, onSubtask, Modifier.padding(bottom = 8.dp).animateItem(), showDate = false)
+            item(key = "h_allday") { SectionHeader("All day", allDay.size) }
+            items(allDay, key = { "a_${it.task.id}" }) { item ->
+                if (item.task.completed) {
+                    SwipeableTaskCard(
+                        item = item,
+                        category = item.task.categoryId?.let(catMap::get),
+                        showDate = false,
+                        isDragging = false,
+                        onToggle = { onToggle(item.task) },
+                        onOpen = { onOpen(item) },
+                        onDelete = { onDelete(item) },
+                        onSubtask = onSubtask,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                } else {
+                    val canTarget = activeGroup == null || activeGroup == "allday"
+                    ReorderableItem(reorderState, key = "a_${item.task.id}", enabled = canTarget) { isDragging ->
+                        SwipeableTaskCard(
+                            item = item,
+                            category = item.task.categoryId?.let(catMap::get),
+                            showDate = false,
+                            isDragging = isDragging,
+                            onToggle = { onToggle(item.task) },
+                            onOpen = { onOpen(item) },
+                            onDelete = { onDelete(item) },
+                            onSubtask = onSubtask,
+                            modifier = Modifier
+                                .padding(bottom = 8.dp)
+                                .longPressDraggableHandle(
+                                    onDragStarted = {
+                                        activeGroup = "allday"
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    },
+                                    onDragStopped = {
+                                        activeGroup = null
+                                        onReorder(allDay.filter { !it.task.completed }.map { it.task })
+                                    }
+                                )
+                        )
+                    }
+                }
             }
         }
         if (timed.isNotEmpty()) {
-            item { SectionHeader("Timeline", timed.size) }
+            item(key = "h_timeline") { SectionHeader("Timeline", timed.size) }
             val nowMin = LocalTime.now().let { it.hour * 60 + it.minute }
             val isToday = selected == LocalDate.now()
-            items(timed, key = { "t" + it.task.id }) { item ->
+            items(timed, key = { "t_${it.task.id}" }) { item ->
                 val past = isToday && (item.task.dueTime ?: 0) < nowMin
-                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).animateItem()) {
-                    Column(Modifier.width(62.dp).padding(top = 14.dp), horizontalAlignment = Alignment.Start) {
-                        val (time, ampm) = Dates.time(item.task.dueTime!!).split(" ").let { it[0] to it.getOrElse(1) { "" } }
-                        Text(time, style = MaterialTheme.typography.titleSmall, color = if (past) t.textFaint else t.text)
-                        Text(ampm, style = MaterialTheme.typography.labelSmall, color = t.textFaint)
+                val canTarget = !item.task.completed && (activeGroup == null || (activeGroup == "timed" && activeTime == item.task.dueTime))
+                ReorderableItem(reorderState, key = "t_${item.task.id}", enabled = canTarget) { isDragging ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(IntrinsicSize.Min)
+                            .then(
+                                if (item.task.completed) Modifier
+                                else Modifier.longPressDraggableHandle(
+                                    onDragStarted = {
+                                        activeGroup = "timed"
+                                        activeTime = item.task.dueTime
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    },
+                                    onDragStopped = {
+                                        activeGroup = null
+                                        activeTime = null
+                                        onReorder(timed.filter { !it.task.completed }.map { it.task })
+                                    }
+                                )
+                            )
+                    ) {
+                        Column(Modifier.width(62.dp).padding(top = 14.dp), horizontalAlignment = Alignment.Start) {
+                            val (time, ampm) = Dates.time(item.task.dueTime!!).split(" ").let { it[0] to it.getOrElse(1) { "" } }
+                            Text(time, style = MaterialTheme.typography.titleSmall, color = if (past) t.textFaint else t.text)
+                            Text(ampm, style = MaterialTheme.typography.labelSmall, color = t.textFaint)
+                        }
+                        Box(Modifier.width(20.dp).fillMaxHeight()) {
+                            Box(Modifier.align(Alignment.TopCenter).padding(top = 18.dp).size(10.dp).clip(CircleShape)
+                                .background(if (item.task.completed) t.textFaint else Palette.priority[item.task.priority].takeIf { item.task.priority > 0 } ?: t.accentStrong))
+                            Box(Modifier.align(Alignment.TopCenter).padding(top = 32.dp).width(2.dp).fillMaxHeight().background(t.divider))
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        SwipeableTaskCard(
+                            item = item,
+                            category = item.task.categoryId?.let(catMap::get),
+                            showDate = false,
+                            isDragging = isDragging,
+                            onToggle = { onToggle(item.task) },
+                            onOpen = { onOpen(item) },
+                            onDelete = { onDelete(item) },
+                            onSubtask = onSubtask,
+                            modifier = Modifier.weight(1f).padding(bottom = 10.dp)
+                        )
                     }
-                    Box(Modifier.width(20.dp).fillMaxHeight()) {
-                        Box(Modifier.align(Alignment.TopCenter).padding(top = 18.dp).size(10.dp).clip(CircleShape)
-                            .background(if (item.task.completed) t.textFaint else Palette.priority[item.task.priority].takeIf { item.task.priority > 0 } ?: t.accentStrong))
-                        Box(Modifier.align(Alignment.TopCenter).padding(top = 32.dp).width(2.dp).fillMaxHeight().background(t.divider))
-                    }
-                    Spacer(Modifier.width(6.dp))
-                    TaskCard(item, item.task.categoryId?.let(catMap::get), { onToggle(item.task) }, { onOpen(item) }, onSubtask,
-                        Modifier.weight(1f).padding(bottom = 10.dp), showDate = false)
                 }
             }
         }

@@ -1,7 +1,5 @@
 package com.lokesh.tidy.ui.screens
 
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -29,9 +26,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lokesh.tidy.data.Category
+import com.lokesh.tidy.data.Repository
+import com.lokesh.tidy.data.Subtask
 import com.lokesh.tidy.data.Task
 import com.lokesh.tidy.data.TaskWithSubtasks
-import com.lokesh.tidy.data.Repository
 import com.lokesh.tidy.ui.Dates
 import com.lokesh.tidy.ui.components.*
 import com.lokesh.tidy.ui.theme.Palette
@@ -49,7 +47,7 @@ private data class TaskRow(val section: String, val item: TaskWithSubtasks) : Ro
 
 fun isToday(ms: Long?): Boolean = ms != null && Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).toLocalDate() == LocalDate.now()
 
-@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TodayScreen(
     name: String,
@@ -59,7 +57,7 @@ fun TodayScreen(
     onToggle: (Task) -> Unit,
     onOpen: (TaskWithSubtasks) -> Unit,
     onDelete: (TaskWithSubtasks) -> Unit,
-    onSubtask: (com.lokesh.tidy.data.Subtask) -> Unit,
+    onSubtask: (Subtask) -> Unit,
     onReorder: (List<Task>) -> Unit,
     onSearch: () -> Unit,
     onSettings: () -> Unit,
@@ -95,7 +93,9 @@ fun TodayScreen(
         val todays = open.filter { it.task.dueDate == today }.sortedWith(compareBy({ it.task.sortOrder }))
         val upcoming = open.filter { it.task.dueDate != null && it.task.dueDate > today }.sortedWith(compareBy({ it.task.dueDate }, { it.task.sortOrder }))
         val someday = open.filter { it.task.dueDate == null }.sortedBy { it.task.sortOrder }
-        val done = filtered.filter { it.task.completed }.sortedByDescending { it.task.completedAt ?: 0 }.take(40)
+        val done = filtered.filter { it.task.completed }
+            .sortedWith(compareByDescending<TaskWithSubtasks> { it.task.completedAt ?: 0L }.thenByDescending { it.task.id })
+            .take(50)
         buildList {
             if (overdue.isNotEmpty()) { add(HeaderRow("overdue", "Overdue", overdue.size, Palette.danger)); overdue.forEach { add(TaskRow("overdue", it)) } }
             add(HeaderRow("today", "Today", todays.size)); todays.forEach { add(TaskRow("today", it)) }
@@ -105,17 +105,16 @@ fun TodayScreen(
         }
     }
     var rows by remember { mutableStateOf(computed) }
-    var dragging by remember { mutableStateOf(false) }
-    LaunchedEffect(computed) { if (!dragging) rows = computed }
+    var activeDragRow by remember { mutableStateOf<TaskRow?>(null) }
+    LaunchedEffect(computed) { if (activeDragRow == null) rows = computed }
 
     val listState = rememberLazyListState()
-    val headerItems = 3 // greeting, progress, chips
     val reorderState = rememberReorderableLazyListState(listState) { from, to ->
         val fromIdx = rows.indexOfFirst { it.key == from.key }
         val toIdx = rows.indexOfFirst { it.key == to.key }
         if (fromIdx < 0 || toIdx < 0) return@rememberReorderableLazyListState
         val a = rows[fromIdx]; val b = rows[toIdx]
-        if (a is TaskRow && b is TaskRow && a.section == b.section && a.section != "done") {
+        if (a is TaskRow && b is TaskRow && a.section == b.section && a.section != "done" && a.item.task.dueDate == b.item.task.dueDate) {
             rows = rows.toMutableList().apply { add(toIdx, removeAt(fromIdx)) }
             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         }
@@ -131,13 +130,26 @@ fun TodayScreen(
             item(key = "greeting") { Greeting(name, onSearch, onSettings) }
             item(key = "progress") { ProgressCard(doneCount, total, streak) }
             item(key = "chips") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 6.dp), modifier = Modifier.padding(top = 6.dp)) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    contentPadding = PaddingValues(vertical = 6.dp),
+                    modifier = Modifier.padding(top = 6.dp)
+                ) {
                     item { SelectChip("All", selectedCategory == null) { onSelectCategory(null) } }
                     items(categories, key = { it.id }) { c ->
                         SelectChip(c.name, selectedCategory == c.id, Palette.vivid.getOrElse(c.colorIndex) { Palette.vivid[0] }, leading = c.emoji.ifBlank { null }) { onSelectCategory(c.id) }
                     }
                     item {
-                        Box(Modifier.size(38.dp).clip(CircleShape).background(t.card).border(1.dp, t.divider, CircleShape).clickable(onClick = onAddCategory), contentAlignment = Alignment.Center) {
+                        Box(
+                            Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(t.card)
+                                .border(1.dp, t.divider, CircleShape)
+                                .clickable(onClick = onAddCategory),
+                            contentAlignment = Alignment.Center
+                        ) {
                             Icon(Icons.Rounded.Add, "Add list", tint = t.textMuted, modifier = Modifier.size(18.dp))
                         }
                     }
@@ -152,7 +164,7 @@ fun TodayScreen(
                                     modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showCompleted = !showCompleted }.padding(horizontal = 8.dp, vertical = 2.dp))
                             }
                         } else if (row.section == "today" && row.count == 0) {
-                            Column(Modifier.animateItem()) {
+                            Column {
                                 SectionHeader(row.title, 0)
                                 Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(t.card).padding(22.dp), contentAlignment = Alignment.Center) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -166,19 +178,50 @@ fun TodayScreen(
                         } else SectionHeader(row.title, row.count, row.color ?: t.textMuted)
                     }
                     is TaskRow -> {
-                        ReorderableItem(reorderState, key = row.key) { isDragging ->
-                            SwipeableTask(
-                                row = row, category = row.item.task.categoryId?.let { catMap[it] }, today = today, isDragging = isDragging,
-                                onToggle = { onToggle(row.item.task) }, onOpen = { onOpen(row.item) }, onDelete = { onDelete(row.item) }, onSubtask = onSubtask,
-                                dragModifier = Modifier.longPressDraggableHandle(
-                                    onDragStarted = { dragging = true; haptic.performHapticFeedback(HapticFeedbackType.LongPress) },
-                                    onDragStopped = {
-                                        dragging = false
-                                        val sectionTasks = rows.filterIsInstance<TaskRow>().filter { it.section == row.section }.map { it.item.task }
-                                        onReorder(sectionTasks)
-                                    }
-                                )
+                        if (row.section == "done") {
+                            // Completed tasks have a fixed chronological position and cannot be dragged
+                            SwipeableTaskCard(
+                                item = row.item,
+                                category = row.item.task.categoryId?.let { catMap[it] },
+                                showDate = true,
+                                isDragging = false,
+                                onToggle = { onToggle(row.item.task) },
+                                onOpen = { onOpen(row.item) },
+                                onDelete = { onDelete(row.item) },
+                                onSubtask = onSubtask,
                             )
+                        } else {
+                            val canTarget = activeDragRow == null ||
+                                (activeDragRow?.section == row.section && activeDragRow?.item?.task?.dueDate == row.item.task.dueDate)
+                            ReorderableItem(
+                                state = reorderState,
+                                key = row.key,
+                                enabled = canTarget,
+                            ) { isDragging ->
+                                SwipeableTaskCard(
+                                    item = row.item,
+                                    category = row.item.task.categoryId?.let { catMap[it] },
+                                    showDate = row.section != "today",
+                                    isDragging = isDragging,
+                                    onToggle = { onToggle(row.item.task) },
+                                    onOpen = { onOpen(row.item) },
+                                    onDelete = { onDelete(row.item) },
+                                    onSubtask = onSubtask,
+                                    modifier = Modifier.longPressDraggableHandle(
+                                        onDragStarted = {
+                                            activeDragRow = row
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        },
+                                        onDragStopped = {
+                                            activeDragRow = null
+                                            val sameDayTasks = rows.filterIsInstance<TaskRow>()
+                                                .filter { it.section == row.section && it.item.task.dueDate == row.item.task.dueDate }
+                                                .map { it.item.task }
+                                            onReorder(sameDayTasks)
+                                        }
+                                    )
+                                )
+                            }
                         }
                     }
                 }
@@ -188,61 +231,21 @@ fun TodayScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SwipeableTask(
-    row: TaskRow, category: Category?, today: Long, isDragging: Boolean,
-    onToggle: () -> Unit, onOpen: () -> Unit, onDelete: () -> Unit, onSubtask: (com.lokesh.tidy.data.Subtask) -> Unit,
-    dragModifier: Modifier,
-) {
-    val t = tidy
-    val haptic = LocalHapticFeedback.current
-    val state = rememberSwipeToDismissBoxState(
-        confirmValueChange = { v ->
-            when (v) {
-                SwipeToDismissBoxValue.StartToEnd -> { haptic.performHapticFeedback(HapticFeedbackType.LongPress); onToggle(); false }
-                SwipeToDismissBoxValue.EndToStart -> { onDelete(); true }
-                else -> false
-            }
-        },
-        positionalThreshold = { it * 0.35f }
-    )
-    SwipeToDismissBox(
-        state = state,
-        backgroundContent = {
-            val dir = state.dismissDirection
-            val color = when (dir) { SwipeToDismissBoxValue.StartToEnd -> Palette.success; SwipeToDismissBoxValue.EndToStart -> Palette.danger; else -> Color.Transparent }
-            val progress = state.progress
-            Box(
-                Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)).background(color.copy(alpha = 0.18f + 0.5f * progress.coerceIn(0f, 1f))).padding(horizontal = 24.dp),
-                contentAlignment = if (dir == SwipeToDismissBoxValue.StartToEnd) Alignment.CenterStart else Alignment.CenterEnd
-            ) {
-                Icon(
-                    if (dir == SwipeToDismissBoxValue.StartToEnd) (if (row.item.task.completed) Icons.Rounded.Undo else Icons.Rounded.Check) else Icons.Rounded.DeleteOutline,
-                    null, tint = Color.White, modifier = Modifier.scale(0.8f + 0.5f * progress.coerceIn(0f, 1f))
-                )
-            }
-        },
-        modifier = dragModifier
-    ) {
-        TaskCard(
-            item = row.item, category = category,
-            onToggle = onToggle, onClick = onOpen, onSubtaskToggle = onSubtask,
-            showDate = row.section != "today", dragging = isDragging
-        )
-    }
-}
-
 @Composable
 private fun Greeting(name: String, onSearch: () -> Unit, onSettings: () -> Unit) {
     val t = tidy
     val h = LocalTime.now().hour
-    val greet = when { h < 5 -> "Good night"; h < 12 -> "Good morning"; h < 17 -> "Good afternoon"; h < 21 -> "Good evening"; else -> "Good night" }
+    val (greet, emoji) = when {
+        h in 5..11 -> "Good morning" to "🌅"
+        h in 12..16 -> "Good afternoon" to "☀️"
+        h in 17..20 -> "Good evening" to "🌆"
+        else -> "Good night" to "🌙"
+    }
     Row(Modifier.fillMaxWidth().statusBarsPadding().padding(top = 18.dp, bottom = 14.dp), verticalAlignment = Alignment.Top) {
         Column(Modifier.weight(1f)) {
             Text(Dates.long(LocalDate.now()), style = MaterialTheme.typography.labelLarge, color = t.textMuted)
             Spacer(Modifier.height(4.dp))
-            Text(if (name.isBlank()) "$greet ✨" else "$greet,\n$name", style = MaterialTheme.typography.headlineLarge, color = t.text)
+            Text(if (name.isBlank()) "$greet $emoji" else "$greet,\n$name", style = MaterialTheme.typography.headlineLarge, color = t.text)
         }
         IconBubble(Icons.Rounded.Search, onSearch)
         Spacer(Modifier.width(10.dp))

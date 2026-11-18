@@ -1,6 +1,8 @@
 package com.lokesh.tidy.data
 
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "categories")
@@ -32,6 +34,8 @@ data class Task(
     val sortOrder: Int = 0,
     /** NONE, DAILY, WEEKDAYS, WEEKLY, MONTHLY, YEARLY */
     val repeat: String = "NONE",
+    /** ID of the next recurring occurrence spawned when this task was completed. */
+    val spawnedTaskId: Long? = null,
 )
 
 @Entity(
@@ -57,6 +61,7 @@ data class Note(
     val isChecklist: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
+    val sortOrder: Int = 0,
 )
 
 data class TaskWithSubtasks(
@@ -79,6 +84,9 @@ interface TidyDao {
     @Query("SELECT * FROM tasks WHERE id = :id")
     suspend fun task(id: Long): TaskWithSubtasks?
 
+    @Query("SELECT * FROM tasks WHERE title = :title AND repeat = :repeat AND dueDate = :dueDate AND completed = 0 LIMIT 1")
+    suspend fun findRecurringInstance(title: String, repeat: String, dueDate: Long): Task?
+
     @Insert suspend fun insertTask(t: Task): Long
     @Update suspend fun updateTask(t: Task)
     @Update suspend fun updateTasks(t: List<Task>)
@@ -99,11 +107,13 @@ interface TidyDao {
     @Query("UPDATE tasks SET categoryId = NULL WHERE categoryId = :id") suspend fun clearCategory(id: Long)
 
     // Notes
-    @Query("SELECT * FROM notes ORDER BY pinned DESC, updatedAt DESC") fun observeNotes(): Flow<List<Note>>
-    @Query("SELECT * FROM notes ORDER BY pinned DESC, updatedAt DESC") suspend fun allNotes(): List<Note>
+    @Query("SELECT * FROM notes ORDER BY pinned DESC, sortOrder ASC, updatedAt DESC") fun observeNotes(): Flow<List<Note>>
+    @Query("SELECT * FROM notes ORDER BY pinned DESC, sortOrder ASC, updatedAt DESC") suspend fun allNotes(): List<Note>
     @Query("SELECT * FROM notes WHERE id = :id") suspend fun note(id: Long): Note?
+    @Query("SELECT COALESCE(MIN(sortOrder), 0) FROM notes") suspend fun minNoteSort(): Int
     @Insert suspend fun insertNote(n: Note): Long
     @Update suspend fun updateNote(n: Note)
+    @Update suspend fun updateNotes(n: List<Note>)
     @Delete suspend fun deleteNote(n: Note)
 
     // Bulk (backup)
@@ -116,7 +126,16 @@ interface TidyDao {
     @Insert suspend fun insertCategoriesRaw(c: List<Category>)
 }
 
-@Database(entities = [Category::class, Task::class, Subtask::class, Note::class], version = 1, exportSchema = false)
+@Database(entities = [Category::class, Task::class, Subtask::class, Note::class], version = 2, exportSchema = false)
 abstract class TidyDatabase : RoomDatabase() {
     abstract fun dao(): TidyDao
+
+    companion object {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tasks ADD COLUMN spawnedTaskId INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE notes ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+    }
 }

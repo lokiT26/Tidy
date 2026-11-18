@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -70,7 +71,7 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding().padding(horizontal = 18.dp).padding(top = 12.dp, bottom = 60.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconBubble(Icons.Rounded.ArrowBack, { vm.setName(name.trim()); onBack() })
+            IconBubble(Icons.AutoMirrored.Rounded.ArrowBack, { vm.setName(name.trim().take(30)); onBack() })
             Spacer(Modifier.width(14.dp))
             Text("Settings", style = MaterialTheme.typography.headlineMedium, color = t.text)
         }
@@ -83,9 +84,19 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
                 }
                 Spacer(Modifier.width(14.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Your name", style = MaterialTheme.typography.labelMedium, color = t.textMuted)
-                    BasicTextField(name, { name = it; vm.setName(it.trim()) }, singleLine = true, textStyle = MaterialTheme.typography.titleMedium.copy(color = t.text), cursorBrush = SolidColor(t.accentStrong),
-                        decorationBox = { inner -> if (name.isEmpty()) Text("Tap to add", style = MaterialTheme.typography.titleMedium, color = t.textFaint); inner() })
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Your name", style = MaterialTheme.typography.labelMedium, color = t.textMuted, modifier = Modifier.weight(1f))
+                        Text("${name.length}/30", style = MaterialTheme.typography.labelSmall, color = if (name.length >= 30) Palette.danger else t.textFaint)
+                    }
+                    BasicTextField(
+                        value = name,
+                        onValueChange = { if (it.length <= 30) { name = it; vm.setName(it.trim()) } },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.titleMedium.copy(color = t.text),
+                        cursorBrush = SolidColor(t.accentStrong),
+                        modifier = Modifier.fillMaxWidth(),
+                        decorationBox = { inner -> if (name.isEmpty()) Text("Tap to add", style = MaterialTheme.typography.titleMedium, color = t.textFaint); inner() }
+                    )
                 }
             }
         }
@@ -153,7 +164,7 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
             Item(Icons.Rounded.CloudDownload, "Restore backup", "Replaces current data") { importLauncher.launch(arrayOf("application/json", "*/*")) }
         }
 
-        Text("Tidy 1.0 · made for Lokesh · 100% offline", style = MaterialTheme.typography.labelSmall, color = t.textFaint, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Text("Tidy 1.1 · made for Lokesh · 100% offline", style = MaterialTheme.typography.labelSmall, color = t.textFaint, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }
 

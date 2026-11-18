@@ -15,6 +15,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,11 +37,16 @@ import com.lokesh.tidy.data.Subtask
 import com.lokesh.tidy.data.Task
 import com.lokesh.tidy.data.TaskWithSubtasks
 import com.lokesh.tidy.ui.Dates
+import com.lokesh.tidy.ui.components.ConfirmDeleteButton
 import com.lokesh.tidy.ui.theme.Palette
 import com.lokesh.tidy.ui.theme.tidy
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+
+private const val MAX_TITLE = 150
+private const val MAX_NOTES = 2000
+private const val MAX_SUBTASK = 120
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,15 +55,22 @@ fun TaskEditorSheet(
     categories: List<Category>,
     defaultDate: Long?,
     defaultCategory: Long?,
+    defaultPriority: Int = 0,
     onSave: (Task, List<Subtask>) -> Unit,
     onDelete: ((Task) -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     val t = tidy
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val base = initial?.task ?: Task(title = "", dueDate = defaultDate, categoryId = defaultCategory)
-    var title by remember { mutableStateOf(base.title) }
-    var notes by remember { mutableStateOf(base.notes) }
+    val validDefaultCat = defaultCategory?.takeIf { id -> categories.any { it.id == id } }
+    val base = initial?.task ?: Task(
+        title = "",
+        dueDate = defaultDate,
+        categoryId = validDefaultCat,
+        priority = defaultPriority.coerceIn(0, 3),
+    )
+    var title by remember { mutableStateOf(base.title.take(MAX_TITLE)) }
+    var notes by remember { mutableStateOf(base.notes.take(MAX_NOTES)) }
     var dueDate by remember { mutableStateOf(base.dueDate) }
     var dueTime by remember { mutableStateOf(base.dueTime) }
     var reminder by remember { mutableStateOf(base.reminderOffset) }
@@ -73,8 +86,8 @@ fun TaskEditorSheet(
 
     fun save() {
         if (title.isBlank()) { onDismiss(); return }
-        val finalSubs = if (newSub.isNotBlank()) subs + Subtask(taskId = 0, title = newSub.trim()) else subs.toList()
-        onSave(base.copy(title = title.trim(), notes = notes.trim(), dueDate = dueDate, dueTime = if (dueDate == null) null else dueTime,
+        val finalSubs = if (newSub.isNotBlank()) subs + Subtask(taskId = 0, title = newSub.trim().take(MAX_SUBTASK)) else subs.toList()
+        onSave(base.copy(title = title.trim().take(MAX_TITLE), notes = notes.trim().take(MAX_NOTES), dueDate = dueDate, dueTime = if (dueDate == null) null else dueTime,
             reminderOffset = if (dueDate == null) null else reminder, priority = priority, categoryId = categoryId, repeat = if (dueDate == null) "NONE" else repeat), finalSubs)
     }
 
@@ -98,11 +111,11 @@ fun TaskEditorSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(if (initial == null) "New task" else "Edit task", style = MaterialTheme.typography.labelLarge, color = t.textMuted, modifier = Modifier.weight(1f))
                 if (initial != null && onDelete != null) {
-                    IconButton(onClick = { onDelete(base) }) { Icon(Icons.Rounded.DeleteOutline, "Delete", tint = Palette.danger) }
+                    ConfirmDeleteButton(onConfirmDelete = { onDelete(base) })
                 }
             }
             BasicTextField(
-                value = title, onValueChange = { title = it },
+                value = title, onValueChange = { if (it.length <= MAX_TITLE) title = it },
                 textStyle = MaterialTheme.typography.headlineSmall.copy(color = t.text),
                 cursorBrush = SolidColor(t.accentStrong),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
@@ -110,15 +123,27 @@ fun TaskEditorSheet(
                 modifier = Modifier.fillMaxWidth().focusRequester(focus).padding(vertical = 6.dp),
                 decorationBox = { inner -> if (title.isEmpty()) Text("What needs doing?", style = MaterialTheme.typography.headlineSmall, color = t.textFaint); inner() }
             )
+            if (title.length >= MAX_TITLE * 3 / 4) {
+                Text("${title.length}/$MAX_TITLE", style = MaterialTheme.typography.labelSmall,
+                    color = if (title.length >= MAX_TITLE) Palette.danger else t.textFaint,
+                    modifier = Modifier.align(Alignment.End))
+            }
             AnimatedVisibility(showNotes) {
-                BasicTextField(
-                    value = notes, onValueChange = { notes = it },
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = t.textMuted),
-                    cursorBrush = SolidColor(t.accentStrong),
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    decorationBox = { inner -> if (notes.isEmpty()) Text("Add details…", style = MaterialTheme.typography.bodyLarge, color = t.textFaint); inner() }
-                )
+                Column {
+                    BasicTextField(
+                        value = notes, onValueChange = { if (it.length <= MAX_NOTES) notes = it },
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = t.textMuted),
+                        cursorBrush = SolidColor(t.accentStrong),
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        decorationBox = { inner -> if (notes.isEmpty()) Text("Add details…", style = MaterialTheme.typography.bodyLarge, color = t.textFaint); inner() }
+                    )
+                    if (notes.length >= MAX_NOTES * 3 / 4) {
+                        Text("${notes.length}/$MAX_NOTES", style = MaterialTheme.typography.labelSmall,
+                            color = if (notes.length >= MAX_NOTES) Palette.danger else t.textFaint,
+                            modifier = Modifier.align(Alignment.End))
+                    }
+                }
             }
 
             Spacer(Modifier.height(14.dp))
@@ -213,20 +238,24 @@ fun TaskEditorSheet(
                 Icon(Icons.Rounded.Add, null, tint = t.textMuted, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 BasicTextField(
-                    value = newSub, onValueChange = { newSub = it },
+                    value = newSub, onValueChange = { if (it.length <= MAX_SUBTASK) newSub = it },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = t.text),
                     cursorBrush = SolidColor(t.accentStrong), singleLine = true,
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Next),
-                    keyboardActions = KeyboardActions(onNext = { if (newSub.isNotBlank()) { subs.add(Subtask(taskId = 0, title = newSub.trim())); newSub = "" } }),
+                    keyboardActions = KeyboardActions(onNext = { if (newSub.isNotBlank()) { subs.add(Subtask(taskId = 0, title = newSub.trim().take(MAX_SUBTASK))); newSub = "" } }),
                     modifier = Modifier.weight(1f),
                     decorationBox = { inner -> if (newSub.isEmpty()) Text("Add a step", style = MaterialTheme.typography.bodyLarge, color = t.textFaint); inner() }
                 )
+                if (newSub.length >= MAX_SUBTASK * 3 / 4) {
+                    Text("${newSub.length}/$MAX_SUBTASK", style = MaterialTheme.typography.labelSmall,
+                        color = if (newSub.length >= MAX_SUBTASK) Palette.danger else t.textFaint)
+                }
             }
 
             Spacer(Modifier.height(20.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (!showNotes) {
-                    TextButton(onClick = { showNotes = true }) { Icon(Icons.Rounded.Notes, null); Spacer(Modifier.width(6.dp)); Text("Details") }
+                    TextButton(onClick = { showNotes = true }) { Icon(Icons.AutoMirrored.Rounded.Notes, null); Spacer(Modifier.width(6.dp)); Text("Details") }
                 }
                 Spacer(Modifier.weight(1f))
                 val enabled = title.isNotBlank()

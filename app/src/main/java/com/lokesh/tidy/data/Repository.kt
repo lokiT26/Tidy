@@ -15,7 +15,10 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 class Repository private constructor(private val context: Context) {
-    val db: TidyDatabase = Room.databaseBuilder(context, TidyDatabase::class.java, "tidy.db").build()
+    val db: TidyDatabase = Room.databaseBuilder(context, TidyDatabase::class.java, "tidy.db")
+        .addMigrations(TidyDatabase.MIGRATION_1_2)
+        .fallbackToDestructiveMigration()
+        .build()
     val dao = db.dao()
     val settings = SettingsStore(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -30,6 +33,7 @@ class Repository private constructor(private val context: Context) {
 
     // ---------- Tasks ----------
     suspend fun saveTask(task: Task, subtasks: List<Subtask>): Long {
+        settings.setLastEditorDefaults(task.priority, task.categoryId)
         val id = if (task.id == 0L) {
             dao.insertTask(task.copy(sortOrder = dao.minSort() - 1))
         } else {
@@ -46,18 +50,43 @@ class Repository private constructor(private val context: Context) {
         val tws = dao.task(taskId) ?: return
         val t = tws.task
         if (t.completed == done) return
-        dao.updateTask(t.copy(completed = done, completedAt = if (done) System.currentTimeMillis() else null))
         if (done) {
             Reminders.cancel(context, t.id)
+            var spawnedId: Long? = t.spawnedTaskId
             if (t.repeat != "NONE" && t.dueDate != null) {
                 val next = nextOccurrence(LocalDate.ofEpochDay(t.dueDate), t.repeat)
-                val newTask = t.copy(id = 0, completed = false, completedAt = null, dueDate = next.toEpochDay(), createdAt = System.currentTimeMillis())
-                val newId = dao.insertTask(newTask)
-                dao.insertSubtasks(tws.subtasks.mapIndexed { i, s -> s.copy(id = 0, taskId = newId, done = false, sortOrder = i) })
-                Reminders.schedule(context, newTask.copy(id = newId))
+                val nextEpoch = next.toEpochDay()
+                val existingById = spawnedId?.let { dao.task(it)?.task }
+                val existingByMatch = dao.findRecurringInstance(t.title, t.repeat, nextEpoch)
+                val existing = existingById ?: existingByMatch
+                if (existing != null) {
+                    spawnedId = existing.id
+                } else {
+                    val newTask = t.copy(
+                        id = 0,
+                        completed = false,
+                        completedAt = null,
+                        dueDate = nextEpoch,
+                        createdAt = System.currentTimeMillis(),
+                        spawnedTaskId = null,
+                    )
+                    val newId = dao.insertTask(newTask)
+                    dao.insertSubtasks(tws.subtasks.mapIndexed { i, s -> s.copy(id = 0, taskId = newId, done = false, sortOrder = i) })
+                    Reminders.schedule(context, newTask.copy(id = newId))
+                    spawnedId = newId
+                }
             }
+            dao.updateTask(t.copy(completed = true, completedAt = System.currentTimeMillis(), spawnedTaskId = spawnedId))
         } else {
-            Reminders.schedule(context, t.copy(completed = false))
+            // If this recurring task had spawned a future uncompleted instance, remove that auto-spawned instance
+            val spawned = t.spawnedTaskId?.let { dao.task(it)?.task }
+            if (spawned != null && !spawned.completed) {
+                Reminders.cancel(context, spawned.id)
+                dao.deleteTask(spawned)
+            }
+            val updated = t.copy(completed = false, completedAt = null, spawnedTaskId = null)
+            dao.updateTask(updated)
+            Reminders.schedule(context, updated)
         }
         changed()
     }
@@ -91,15 +120,18 @@ class Repository private constructor(private val context: Context) {
 
     // ---------- Notes ----------
     suspend fun saveNote(n: Note): Long {
-        val id = if (n.id == 0L) dao.insertNote(n) else { dao.updateNote(n); n.id }
+        val id = if (n.id == 0L) dao.insertNote(n.copy(sortOrder = dao.minNoteSort() - 1)) else { dao.updateNote(n); n.id }
         changed(); return id
     }
     suspend fun deleteNote(n: Note) { dao.deleteNote(n); changed() }
+    suspend fun reorderNotes(ordered: List<Note>) {
+        dao.updateNotes(ordered.mapIndexed { i, n -> n.copy(sortOrder = i) }); changed()
+    }
 
     // ---------- Backup ----------
     suspend fun exportJson(): String {
         val root = JSONObject()
-        root.put("version", 1)
+        root.put("version", 2)
         root.put("categories", JSONArray().apply {
             dao.allCategories().forEach { put(JSONObject().put("id", it.id).put("name", it.name).put("color", it.colorIndex).put("emoji", it.emoji).put("sort", it.sortOrder)) }
         })
@@ -116,7 +148,7 @@ class Repository private constructor(private val context: Context) {
             }
         })
         root.put("notes", JSONArray().apply {
-            dao.allNotes().forEach { put(JSONObject().put("title", it.title).put("content", it.content).put("color", it.colorIndex).put("pinned", it.pinned).put("checklist", it.isChecklist).put("createdAt", it.createdAt).put("updatedAt", it.updatedAt)) }
+            dao.allNotes().forEach { put(JSONObject().put("title", it.title).put("content", it.content).put("color", it.colorIndex).put("pinned", it.pinned).put("checklist", it.isChecklist).put("createdAt", it.createdAt).put("updatedAt", it.updatedAt).put("sort", it.sortOrder)) }
         })
         return root.toString(2)
     }
@@ -149,7 +181,7 @@ class Repository private constructor(private val context: Context) {
         val notes = root.optJSONArray("notes") ?: JSONArray()
         dao.insertNotesRaw((0 until notes.length()).map { i ->
             val o = notes.getJSONObject(i)
-            Note(title = o.optString("title"), content = o.optString("content"), colorIndex = o.optInt("color"), pinned = o.optBoolean("pinned"), isChecklist = o.optBoolean("checklist"), createdAt = o.optLong("createdAt"), updatedAt = o.optLong("updatedAt"))
+            Note(title = o.optString("title"), content = o.optString("content"), colorIndex = o.optInt("color"), pinned = o.optBoolean("pinned"), isChecklist = o.optBoolean("checklist"), createdAt = o.optLong("createdAt"), updatedAt = o.optLong("updatedAt"), sortOrder = o.optInt("sort", i))
         })
         changed()
     }

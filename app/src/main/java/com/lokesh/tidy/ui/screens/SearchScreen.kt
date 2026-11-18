@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,7 +35,8 @@ import com.lokesh.tidy.ui.theme.tidy
 @Composable
 fun SearchScreen(
     tasks: List<TaskWithSubtasks>, notes: List<Note>, categories: List<Category>,
-    onToggle: (Task) -> Unit, onOpenTask: (TaskWithSubtasks) -> Unit, onOpenNote: (Note) -> Unit, onSubtask: (Subtask) -> Unit, onBack: () -> Unit,
+    onToggle: (Task) -> Unit, onOpenTask: (TaskWithSubtasks) -> Unit, onDeleteTask: (TaskWithSubtasks) -> Unit,
+    onOpenNote: (Note) -> Unit, onSubtask: (Subtask) -> Unit, onBack: () -> Unit,
 ) {
     val t = tidy
     BackHandler(onBack = onBack)
@@ -52,7 +54,7 @@ fun SearchScreen(
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Row(Modifier.statusBarsPadding().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconBubble(Icons.Rounded.ArrowBack, onBack)
+                IconBubble(Icons.AutoMirrored.Rounded.ArrowBack, onBack)
                 Spacer(Modifier.width(10.dp))
                 Row(Modifier.weight(1f).clip(RoundedCornerShape(50)).background(t.card).padding(horizontal = 18.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
                     BasicTextField(q, { q = it }, singleLine = true, textStyle = MaterialTheme.typography.bodyLarge.copy(color = t.text), cursorBrush = SolidColor(t.accentStrong),
@@ -71,7 +73,18 @@ fun SearchScreen(
         else if (tr.isEmpty() && nr.isEmpty()) item { EmptyState("🤷", "No results", "Try another keyword") }
         if (tr.isNotEmpty()) {
             item { SectionHeader("Tasks", tr.size) }
-            items(tr, key = { "t" + it.task.id }) { TaskCard(it, it.task.categoryId?.let(catMap::get), { onToggle(it.task) }, { onOpenTask(it) }, onSubtask) }
+            items(tr, key = { "t" + it.task.id }) {
+                SwipeableTaskCard(
+                    item = it,
+                    category = it.task.categoryId?.let(catMap::get),
+                    showDate = true,
+                    isDragging = false,
+                    onToggle = { onToggle(it.task) },
+                    onOpen = { onOpenTask(it) },
+                    onDelete = { onDeleteTask(it) },
+                    onSubtask = onSubtask,
+                )
+            }
         }
         if (nr.isNotEmpty()) {
             item { SectionHeader("Notes", nr.size) }
@@ -97,10 +110,25 @@ fun CategoryDialog(initial: Category?, onSave: (Category) -> Unit, onDelete: ((C
         onDismissRequest = onDismiss,
         containerColor = t.card,
         shape = RoundedCornerShape(28.dp),
-        title = { Text(if (initial == null) "New list" else "Edit list", style = MaterialTheme.typography.titleLarge) },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (initial == null) "New list" else "Edit list", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                if (initial != null && onDelete != null) {
+                    ConfirmDeleteButton(onConfirmDelete = { onDelete(initial) })
+                }
+            }
+        },
         text = {
             Column {
-                OutlinedTextField(name, { name = it }, singleLine = true, label = { Text("Name") }, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { if (it.length <= 30) name = it },
+                    singleLine = true,
+                    label = { Text("Name") },
+                    supportingText = if (name.length >= 22) ({ Text("${name.length}/30") }) else null,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Spacer(Modifier.height(14.dp))
                 @OptIn(ExperimentalLayoutApi::class)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -118,12 +146,7 @@ fun CategoryDialog(initial: Category?, onSave: (Category) -> Unit, onDelete: ((C
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onSave((initial ?: Category(name = "")).copy(name = name.trim(), emoji = emoji, colorIndex = color)) }) { Text("Save") } },
-        dismissButton = {
-            Row {
-                if (initial != null && onDelete != null) TextButton(onClick = { onDelete(initial) }) { Text("Delete", color = Palette.danger) }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-            }
-        }
+        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onSave((initial ?: Category(name = "")).copy(name = name.trim().take(30), emoji = emoji, colorIndex = color)) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }

@@ -33,6 +33,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun saveNote(n: Note, onId: (Long) -> Unit = {}) = viewModelScope.launch { onId(repo.saveNote(n)) }
     fun deleteNote(n: Note) = viewModelScope.launch { repo.deleteNote(n) }
     fun restoreNote(n: Note) = viewModelScope.launch { repo.saveNote(n.copy(id = 0)) }
+    fun reorderNotes(list: List<Note>) = viewModelScope.launch { repo.reorderNotes(list) }
 
     fun setName(v: String) = viewModelScope.launch { repo.settings.setName(v) }
     fun setTheme(v: Int) = viewModelScope.launch { repo.settings.setTheme(v) }

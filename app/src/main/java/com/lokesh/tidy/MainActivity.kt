@@ -6,7 +6,6 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -16,11 +15,15 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.StickyNote2
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,6 +39,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.lokesh.tidy.data.Category
@@ -48,8 +52,13 @@ import com.lokesh.tidy.ui.components.glass
 import com.lokesh.tidy.ui.screens.*
 import com.lokesh.tidy.ui.theme.TidyTheme
 import com.lokesh.tidy.ui.theme.tidy
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
+import java.time.LocalTime
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
@@ -104,6 +113,7 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
     val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    var snackbarJob by remember { mutableStateOf<Job?>(null) }
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var overlay by remember { mutableStateOf(Overlay.None) }
@@ -137,16 +147,36 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
         }
     }
 
+    fun showUndoSnackbar(message: String, onUndo: () -> Unit) {
+        snackbarJob?.cancel()
+        snackbar.currentSnackbarData?.dismiss()
+        snackbarJob = scope.launch {
+            val result = withTimeoutOrNull(8000L) {
+                snackbar.showSnackbar(message, "Undo", duration = SnackbarDuration.Indefinite)
+            }
+            if (result == null) {
+                snackbar.currentSnackbarData?.dismiss()
+            } else if (result == SnackbarResult.ActionPerformed) {
+                onUndo()
+            }
+        }
+    }
+
     fun toggle(task: com.lokesh.tidy.data.Task) {
         if (s.haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         vm.setDone(task.id, !task.completed)
     }
     fun deleteWithUndo(item: TaskWithSubtasks) {
         vm.deleteTask(item.task)
-        scope.launch {
-            snackbar.currentSnackbarData?.dismiss()
-            val r = snackbar.showSnackbar("Task deleted", "Undo", duration = SnackbarDuration.Short)
-            if (r == SnackbarResult.ActionPerformed) vm.restoreTask(item)
+        showUndoSnackbar("Task deleted") { vm.restoreTask(item) }
+    }
+
+    val todayNavIcon = remember(LocalTime.now().hour) {
+        when (LocalTime.now().hour) {
+            in 5..11 -> Icons.Rounded.WbTwilight
+            in 12..16 -> Icons.Rounded.WbSunny
+            in 17..20 -> Icons.Rounded.NightsStay
+            else -> Icons.Rounded.Bedtime
         }
     }
 
@@ -164,11 +194,20 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
                     selectedCategory = selectedCategory, onSelectCategory = { selectedCategory = it },
                     onAddCategory = { editCategory = null; showCategoryDialog = true },
                 )
-                1 -> CalendarScreen(tasks, categories, calendarDay, { calendarDay = it }, ::toggle, { editingTask = it }, { vm.toggleSubtask(it) })
-                2 -> NotesScreen(notes, onOpen = { editingNote = it; overlay = Overlay.Note }, onTogglePin = {
-                    if (s.haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    vm.saveNote(it.copy(pinned = !it.pinned))
-                })
+                1 -> CalendarScreen(
+                    tasks = tasks, categories = categories, selected = calendarDay, onSelect = { calendarDay = it },
+                    onToggle = ::toggle, onOpen = { editingTask = it }, onDelete = ::deleteWithUndo,
+                    onSubtask = { vm.toggleSubtask(it) }, onReorder = { vm.reorder(it) }
+                )
+                2 -> NotesScreen(
+                    notes = notes,
+                    onOpen = { editingNote = it; overlay = Overlay.Note },
+                    onTogglePin = {
+                        if (s.haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        vm.saveNote(it.copy(pinned = !it.pinned))
+                    },
+                    onReorder = { vm.reorderNotes(it) }
+                )
                 else -> StatsScreen(tasks, categories)
             }
         }
@@ -182,9 +221,9 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
                 Modifier.weight(1f).height(66.dp).glass(RoundedCornerShape(33.dp), t.glass, t.glassBorder, t.dark).padding(horizontal = 6.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                NavItem(Icons.Rounded.WbSunny, "Today", tab == 0) { tab = 0 }
+                NavItem(todayNavIcon, "Today", tab == 0) { tab = 0 }
                 NavItem(Icons.Rounded.CalendarMonth, "Calendar", tab == 1) { tab = 1 }
-                NavItem(Icons.Rounded.StickyNote2, "Notes", tab == 2) { tab = 2 }
+                NavItem(Icons.AutoMirrored.Rounded.StickyNote2, "Notes", tab == 2) { tab = 2 }
                 NavItem(Icons.Rounded.Insights, "Stats", tab == 3) { tab = 3 }
             }
             Spacer(Modifier.width(12.dp))
@@ -204,8 +243,30 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
             }
         }
 
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp, start = 16.dp, end = 16.dp)) {
-            Snackbar(it, shape = RoundedCornerShape(18.dp), containerColor = if (t.dark) Color(0xFF2E2E36) else Color(0xFF1E1E24), contentColor = Color.White, actionColor = t.accent.pastel)
+        // 8-second Undo snackbar, swipeable either left or right to dismiss immediately
+        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 96.dp, start = 16.dp, end = 16.dp)) { data ->
+            val offsetX = remember(data) { Animatable(0f) }
+            val drag = rememberDraggableState { delta ->
+                scope.launch { offsetX.snapTo(offsetX.value + delta) }
+            }
+            Box(
+                Modifier
+                    .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                    .graphicsLayer { alpha = (1f - abs(offsetX.value) / 420f).coerceIn(0f, 1f) }
+                    .draggable(
+                        state = drag,
+                        orientation = Orientation.Horizontal,
+                        onDragStopped = { velocity ->
+                            if (abs(offsetX.value) > 110f || abs(velocity) > 900f) {
+                                data.dismiss()
+                            } else {
+                                offsetX.animateTo(0f, spring(stiffness = 500f))
+                            }
+                        }
+                    )
+            ) {
+                Snackbar(data, shape = RoundedCornerShape(18.dp), containerColor = if (t.dark) Color(0xFF2E2E36) else Color(0xFF1E1E24), contentColor = Color.White, actionColor = t.accent.pastel)
+            }
         }
 
         // Overlays
@@ -217,16 +278,17 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
             val current = remember { mutableStateOf(overlay) }.also { if (overlay != Overlay.None) it.value = overlay }.value
             AmbientBackground {
                 when (current) {
-                    Overlay.Search -> SearchScreen(tasks, notes, categories, ::toggle, { editingTask = it }, { editingNote = it; overlay = Overlay.Note }, { vm.toggleSubtask(it) }) { overlay = Overlay.None }
+                    Overlay.Search -> SearchScreen(
+                        tasks = tasks, notes = notes, categories = categories,
+                        onToggle = ::toggle, onOpenTask = { editingTask = it }, onDeleteTask = ::deleteWithUndo,
+                        onOpenNote = { editingNote = it; overlay = Overlay.Note }, onSubtask = { vm.toggleSubtask(it) }
+                    ) { overlay = Overlay.None }
                     Overlay.Settings -> SettingsScreen(vm, s, categories, { editCategory = it; showCategoryDialog = true }) { overlay = Overlay.None }
                     Overlay.Note -> editingNote?.let { n ->
                         key(n.id, n.createdAt) {
                             NoteEditor(n, onSave = { vm.saveNote(it) }, onDelete = { del ->
                                 vm.deleteNote(del)
-                                scope.launch {
-                                    val r = snackbar.showSnackbar("Note deleted", "Undo", duration = SnackbarDuration.Short)
-                                    if (r == SnackbarResult.ActionPerformed) vm.restoreNote(del)
-                                }
+                                showUndoSnackbar("Note deleted") { vm.restoreNote(del) }
                             }, onClose = { overlay = Overlay.None; editingNote = null })
                         }
                     }
@@ -241,7 +303,8 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
             initial = editingTask,
             categories = categories,
             defaultDate = if (tab == 1) calendarDay.toEpochDay() else LocalDate.now().toEpochDay(),
-            defaultCategory = selectedCategory,
+            defaultCategory = selectedCategory ?: s.lastCategoryId,
+            defaultPriority = s.lastPriority,
             onSave = { task, subs -> vm.saveTask(task, subs); newTask = false; editingTask = null },
             onDelete = { _ -> editingTask?.let { deleteWithUndo(it) }; editingTask = null; newTask = false },
             onDismiss = { newTask = false; editingTask = null },

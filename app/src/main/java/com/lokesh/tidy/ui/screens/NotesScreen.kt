@@ -2,6 +2,7 @@ package com.lokesh.tidy.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -15,6 +16,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,8 +25,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextDecoration
@@ -33,6 +39,8 @@ import com.lokesh.tidy.data.Note
 import com.lokesh.tidy.ui.components.*
 import com.lokesh.tidy.ui.theme.Palette
 import com.lokesh.tidy.ui.theme.tidy
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyStaggeredGridState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -48,24 +56,64 @@ fun parseChecklist(content: String): List<CheckItem> = content.lines().filter { 
 }
 fun serializeChecklist(items: List<CheckItem>) = items.joinToString("\n") { (if (it.done) "[x] " else "[ ] ") + it.text }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun NotesScreen(notes: List<Note>, onOpen: (Note) -> Unit, onTogglePin: (Note) -> Unit) {
+fun NotesScreen(
+    notes: List<Note>,
+    onOpen: (Note) -> Unit,
+    onTogglePin: (Note) -> Unit,
+    onReorder: (List<Note>) -> Unit,
+) {
     val t = tidy
+    val haptic = LocalHapticFeedback.current
     var query by rememberSaveable { mutableStateOf("") }
     val filtered = remember(notes, query) {
         if (query.isBlank()) notes else notes.filter { it.title.contains(query, true) || it.content.contains(query, true) }
     }
-    val pinned = filtered.filter { it.pinned }
-    val others = filtered.filter { !it.pinned }
+    val computedPinned = remember(filtered) { filtered.filter { it.pinned } }
+    val computedOthers = remember(filtered) { filtered.filter { !it.pinned } }
+
+    var pinned by remember { mutableStateOf(computedPinned) }
+    var others by remember { mutableStateOf(computedOthers) }
+    var activePinned by remember { mutableStateOf<Boolean?>(null) }
+
+    LaunchedEffect(computedPinned, computedOthers) {
+        if (activePinned == null) {
+            pinned = computedPinned
+            others = computedOthers
+        }
+    }
+
+    val gridState = rememberLazyStaggeredGridState()
+    val reorderState = rememberReorderableLazyStaggeredGridState(gridState) { from, to ->
+        val fk = from.key as? String ?: return@rememberReorderableLazyStaggeredGridState
+        val tk = to.key as? String ?: return@rememberReorderableLazyStaggeredGridState
+        if (fk.startsWith("p_") && tk.startsWith("p_")) {
+            val fi = pinned.indexOfFirst { "p_${it.id}" == fk }
+            val ti = pinned.indexOfFirst { "p_${it.id}" == tk }
+            if (fi >= 0 && ti >= 0) {
+                pinned = pinned.toMutableList().apply { add(ti, removeAt(fi)) }
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+        } else if (fk.startsWith("o_") && tk.startsWith("o_")) {
+            val fi = others.indexOfFirst { "o_${it.id}" == fk }
+            val ti = others.indexOfFirst { "o_${it.id}" == tk }
+            if (fi >= 0 && ti >= 0) {
+                others = others.toMutableList().apply { add(ti, removeAt(fi)) }
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+        }
+    }
 
     LazyVerticalStaggeredGrid(
         columns = StaggeredGridCells.Fixed(2),
+        state = gridState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 140.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalItemSpacing = 12.dp,
     ) {
-        item(span = StaggeredGridItemSpan.FullLine) {
+        item(key = "header", span = StaggeredGridItemSpan.FullLine) {
             Column(Modifier.statusBarsPadding().padding(top = 18.dp)) {
                 Text("${notes.size} notes", style = MaterialTheme.typography.labelLarge, color = t.textMuted)
                 Text("Notes", style = MaterialTheme.typography.headlineLarge, color = t.text)
@@ -84,36 +132,96 @@ fun NotesScreen(notes: List<Note>, onOpen: (Note) -> Unit, onTogglePin: (Note) -
             }
         }
         if (filtered.isEmpty()) {
-            item(span = StaggeredGridItemSpan.FullLine) {
+            item(key = "empty", span = StaggeredGridItemSpan.FullLine) {
                 EmptyState("📝", if (query.isBlank()) "No notes yet" else "No matches", if (query.isBlank()) "Capture a thought with +" else "Try a different word")
             }
         }
         if (pinned.isNotEmpty()) {
-            item(span = StaggeredGridItemSpan.FullLine) { SectionHeader("Pinned", pinned.size) }
-            items(pinned, key = { it.id }) { NoteCard(it, Modifier.animateItem(), { onOpen(it) }, { onTogglePin(it) }) }
+            item(key = "h_pinned", span = StaggeredGridItemSpan.FullLine) { SectionHeader("Pinned", pinned.size) }
+            items(pinned, key = { "p_${it.id}" }) { n ->
+                val canTarget = activePinned == null || activePinned == true
+                ReorderableItem(reorderState, key = "p_${n.id}", enabled = canTarget) { isDragging ->
+                    NoteCard(
+                        n = n,
+                        dragging = isDragging,
+                        modifier = Modifier.longPressDraggableHandle(
+                            onDragStarted = {
+                                activePinned = true
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            },
+                            onDragStopped = {
+                                activePinned = null
+                                onReorder(pinned)
+                            }
+                        ),
+                        onClick = { onOpen(n) },
+                        onPinClick = { onTogglePin(n) },
+                    )
+                }
+            }
         }
         if (others.isNotEmpty()) {
-            if (pinned.isNotEmpty()) item(span = StaggeredGridItemSpan.FullLine) { SectionHeader("Others", others.size) }
-            items(others, key = { it.id }) { NoteCard(it, Modifier.animateItem(), { onOpen(it) }, { onTogglePin(it) }) }
+            if (pinned.isNotEmpty()) item(key = "h_others", span = StaggeredGridItemSpan.FullLine) { SectionHeader("Others", others.size) }
+            items(others, key = { "o_${it.id}" }) { n ->
+                val canTarget = activePinned == null || activePinned == false
+                ReorderableItem(reorderState, key = "o_${n.id}", enabled = canTarget) { isDragging ->
+                    NoteCard(
+                        n = n,
+                        dragging = isDragging,
+                        modifier = Modifier.longPressDraggableHandle(
+                            onDragStarted = {
+                                activePinned = false
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            },
+                            onDragStopped = {
+                                activePinned = null
+                                onReorder(others)
+                            }
+                        ),
+                        onClick = { onOpen(n) },
+                        onPinClick = { onTogglePin(n) },
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun NoteCard(n: Note, modifier: Modifier, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun NoteCard(
+    n: Note,
+    dragging: Boolean,
+    modifier: Modifier,
+    onClick: () -> Unit,
+    onPinClick: () -> Unit,
+) {
     val t = tidy
     val bg = Palette.noteColor(n.colorIndex, t.dark)
     val fg = if (t.dark) t.text else Color(0xFF1C1B22)
+    val elevation by animateDpAsState(if (dragging) 16.dp else 0.dp, label = "ne")
     Column(
-        modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(bg)
+        modifier
+            .fillMaxWidth()
+            .shadow(elevation, RoundedCornerShape(24.dp), ambientColor = t.accentStrong, spotColor = t.accentStrong)
+            .clip(RoundedCornerShape(24.dp))
+            .background(bg)
             .then(if (n.colorIndex == 0) Modifier.border(1.dp, t.divider, RoundedCornerShape(24.dp)) else Modifier)
-            .bouncyClick(onClick, onLongClick)
+            .bouncyClick(onClick = onClick, onDoubleClick = onPinClick)
             .padding(16.dp)
     ) {
         Row(verticalAlignment = Alignment.Top) {
             if (n.title.isNotBlank()) Text(n.title, style = MaterialTheme.typography.titleMedium, color = fg, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             else Spacer(Modifier.weight(1f))
-            if (n.pinned) Icon(Icons.Rounded.PushPin, null, tint = fg.copy(alpha = 0.5f), modifier = Modifier.size(16.dp))
+            Icon(
+                Icons.Rounded.PushPin,
+                contentDescription = if (n.pinned) "Unpin note" else "Pin note",
+                tint = if (n.pinned) fg.copy(alpha = 0.65f) else fg.copy(alpha = 0.22f),
+                modifier = Modifier
+                    .size(22.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onPinClick)
+                    .padding(3.dp)
+            )
         }
         if (n.isChecklist) {
             val items = parseChecklist(n.content)
@@ -164,15 +272,17 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
     Box(Modifier.fillMaxSize().background(bgColor)) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { close() }) { Icon(Icons.Rounded.ArrowBack, "Back", tint = fg) }
+                IconButton(onClick = { close() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = fg) }
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = {
                     if (!checklist) { items.clear(); items.addAll(content.lines().filter { it.isNotBlank() }.map { CheckItem(false, it.trim()) }) }
                     else { content = items.joinToString("\n") { it.text } }
                     checklist = !checklist
-                }) { Icon(if (checklist) Icons.Rounded.Notes else Icons.Rounded.Checklist, "Checklist", tint = fg) }
-                IconButton(onClick = { pinned = !pinned }) { Icon(if (pinned) Icons.Rounded.PushPin else Icons.Rounded.PushPin, "Pin", tint = if (pinned) t.accentStrong else fg.copy(alpha = 0.45f)) }
-                if (initial.id != 0L) IconButton(onClick = { onDelete(initial); onClose() }) { Icon(Icons.Rounded.DeleteOutline, "Delete", tint = fg) }
+                }) { Icon(if (checklist) Icons.AutoMirrored.Rounded.Notes else Icons.Rounded.Checklist, "Checklist", tint = fg) }
+                IconButton(onClick = { pinned = !pinned }) { Icon(Icons.Rounded.PushPin, "Pin", tint = if (pinned) t.accentStrong else fg.copy(alpha = 0.45f)) }
+                if (initial.id != 0L) {
+                    ConfirmDeleteButton(onConfirmDelete = { onDelete(initial); onClose() }, iconTint = fg)
+                }
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
                 BasicTextField(title, { title = it }, textStyle = MaterialTheme.typography.headlineMedium.copy(color = fg), cursorBrush = SolidColor(t.accentStrong),

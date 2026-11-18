@@ -3,12 +3,16 @@ package com.lokesh.tidy.ui.components
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,11 +28,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lokesh.tidy.data.Category
@@ -37,7 +43,10 @@ import com.lokesh.tidy.data.TaskWithSubtasks
 import com.lokesh.tidy.ui.Dates
 import com.lokesh.tidy.ui.theme.Palette
 import com.lokesh.tidy.ui.theme.tidy
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -68,13 +77,13 @@ fun Modifier.glass(shape: androidx.compose.ui.graphics.Shape, fill: Color, borde
 
 /** Press-to-shrink spring feedback. */
 @OptIn(ExperimentalFoundationApi::class)
-fun Modifier.bouncyClick(onClick: () -> Unit, onLongClick: (() -> Unit)? = null): Modifier = composed {
+fun Modifier.bouncyClick(onClick: () -> Unit, onLongClick: (() -> Unit)? = null, onDoubleClick: (() -> Unit)? = null): Modifier = composed {
     val src = remember { MutableInteractionSource() }
     val pressed by src.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(dampingRatio = 0.5f, stiffness = 600f), label = "s")
     this
         .graphicsLayer { scaleX = scale; scaleY = scale }
-        .combinedClickable(interactionSource = src, indication = null, onClick = onClick, onLongClick = onLongClick)
+        .combinedClickable(interactionSource = src, indication = null, onClick = onClick, onLongClick = onLongClick, onDoubleClick = onDoubleClick)
 }
 
 @Composable
@@ -220,6 +229,220 @@ fun TaskCard(
     }
 }
 
+/**
+ * Reliable horizontal swipe wrapper for task cards:
+ * - Swipe right past threshold -> completes or un-completes the task reliably across all sections.
+ * - Swipe left -> latches open to reveal a sleek red "Tap to delete" pill (2-step accidental-swipe protection).
+ */
+@Composable
+fun SwipeableTaskCard(
+    item: TaskWithSubtasks,
+    category: Category?,
+    showDate: Boolean,
+    isDragging: Boolean,
+    onToggle: () -> Unit,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+    onSubtask: (Subtask) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val currentOnToggle by rememberUpdatedState(onToggle)
+    val currentOnDelete by rememberUpdatedState(onDelete)
+    val currentOnOpen by rememberUpdatedState(onOpen)
+
+    val completeThresholdPx = with(density) { 80.dp.toPx() }
+    val deleteRevealPx = with(density) { -126.dp.toPx() }
+    val maxRightPx = with(density) { 148.dp.toPx() }
+    val maxLeftPx = with(density) { -156.dp.toPx() }
+
+    val offsetX = remember(item.task.id) { Animatable(0f) }
+    var armedRight by remember(item.task.id) { mutableStateOf(false) }
+    var deleteRevealed by remember(item.task.id) { mutableStateOf(false) }
+
+    // Reset offset if dragging starts or task completion state flips
+    LaunchedEffect(isDragging, item.task.completed) {
+        if (offsetX.value != 0f) {
+            deleteRevealed = false
+            armedRight = false
+            offsetX.snapTo(0f)
+        }
+    }
+
+    val dragState = rememberDraggableState { delta ->
+        if (isDragging) return@rememberDraggableState
+        val next = (offsetX.value + delta).coerceIn(maxLeftPx, maxRightPx)
+        scope.launch { offsetX.snapTo(next) }
+        val crossedRight = next >= completeThresholdPx
+        if (crossedRight != armedRight) {
+            armedRight = crossedRight
+            if (crossedRight) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+    }
+
+    Box(modifier.fillMaxWidth()) {
+        // Background layer
+        val dx = offsetX.value
+        if (dx > 2f) {
+            val progress = (dx / completeThresholdPx).coerceIn(0f, 1f)
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Palette.success.copy(alpha = 0.22f + 0.58f * progress))
+                    .padding(horizontal = 24.dp),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        if (item.task.completed) Icons.AutoMirrored.Rounded.Undo else Icons.Rounded.Check,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.scale(0.85f + 0.35f * progress)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (item.task.completed) "Reopen" else "Complete",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White.copy(alpha = progress)
+                    )
+                }
+            }
+        } else if (dx < -2f) {
+            val progress = (-dx / -deleteRevealPx).coerceIn(0f, 1f)
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Palette.danger.copy(alpha = 0.14f + 0.16f * progress))
+                    .padding(end = 10.dp),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Palette.danger)
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            deleteRevealed = false
+                            scope.launch { offsetX.snapTo(0f) }
+                            currentOnDelete()
+                        }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Rounded.DeleteOutline, "Delete", tint = Color.White, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Delete", style = MaterialTheme.typography.labelLarge, color = Color.White)
+                }
+            }
+        }
+
+        // Foreground card
+        Box(
+            Modifier
+                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                .draggable(
+                    state = dragState,
+                    orientation = Orientation.Horizontal,
+                    enabled = !isDragging,
+                    onDragStopped = { velocity ->
+                        val cur = offsetX.value
+                        when {
+                            cur >= completeThresholdPx -> {
+                                armedRight = false
+                                deleteRevealed = false
+                                currentOnToggle()
+                                offsetX.animateTo(0f, spring(dampingRatio = 0.75f, stiffness = 500f))
+                            }
+                            cur <= deleteRevealPx * 0.55f || (cur < -24f && velocity < -700f) -> {
+                                if (!deleteRevealed) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                deleteRevealed = true
+                                offsetX.animateTo(deleteRevealPx, spring(dampingRatio = 0.8f, stiffness = 520f))
+                            }
+                            else -> {
+                                armedRight = false
+                                deleteRevealed = false
+                                offsetX.animateTo(0f, spring(dampingRatio = 0.8f, stiffness = 520f))
+                            }
+                        }
+                    }
+                )
+        ) {
+            TaskCard(
+                item = item,
+                category = category,
+                onToggle = {
+                    if (deleteRevealed) {
+                        deleteRevealed = false
+                        scope.launch { offsetX.animateTo(0f, spring(stiffness = 520f)) }
+                    } else currentOnToggle()
+                },
+                onClick = {
+                    if (deleteRevealed) {
+                        deleteRevealed = false
+                        scope.launch { offsetX.animateTo(0f, spring(stiffness = 520f)) }
+                    } else currentOnOpen()
+                },
+                onSubtaskToggle = onSubtask,
+                showDate = showDate,
+                dragging = isDragging,
+            )
+        }
+    }
+}
+
+/**
+ * Sleek 2-tap inline delete confirmation pill used across editors and dialogs
+ * instead of a jarring system popup. First tap reveals "Tap to delete" for 3.5s;
+ * second tap confirms and triggers the delete.
+ */
+@Composable
+fun ConfirmDeleteButton(
+    onConfirmDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+    iconTint: Color = Palette.danger,
+) {
+    val haptic = LocalHapticFeedback.current
+    var armed by remember { mutableStateOf(false) }
+    LaunchedEffect(armed) {
+        if (armed) {
+            delay(3500)
+            armed = false
+        }
+    }
+    Row(
+        modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (armed) Palette.danger else Color.Transparent)
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                if (armed) {
+                    armed = false
+                    onConfirmDelete()
+                } else {
+                    armed = true
+                }
+            }
+            .padding(horizontal = if (armed) 14.dp else 8.dp, vertical = 8.dp)
+            .animateContentSize(spring(dampingRatio = 0.75f, stiffness = 550f)),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Rounded.DeleteOutline,
+            contentDescription = "Delete",
+            tint = if (armed) Color.White else iconTint,
+            modifier = Modifier.size(20.dp)
+        )
+        if (armed) {
+            Spacer(Modifier.width(6.dp))
+            Text("Tap to delete", style = MaterialTheme.typography.labelLarge, color = Color.White)
+        }
+    }
+}
+
 @Composable
 fun SectionHeader(title: String, count: Int? = null, color: Color = tidy.textMuted, trailing: @Composable (() -> Unit)? = null) {
     Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 18.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -240,14 +463,15 @@ fun SelectChip(text: String, selected: Boolean, color: Color = tidy.accentStrong
     val fg by animateColorAsState(if (selected) (if (t.dark) Color(0xFF121214) else Color.White) else t.text, label = "fg")
     Row(
         Modifier
+            .height(38.dp)
             .clip(RoundedCornerShape(50))
             .background(bg)
             .border(1.dp, if (selected) Color.Transparent else t.divider, RoundedCornerShape(50))
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (leading != null) { Text(leading, fontSize = 13.sp); Spacer(Modifier.width(6.dp)) }
+        if (leading != null) { Text(leading, fontSize = 13.sp, lineHeight = 16.sp); Spacer(Modifier.width(6.dp)) }
         Text(text, style = MaterialTheme.typography.labelLarge, color = fg)
     }
 }
@@ -278,12 +502,17 @@ fun EmptyState(emoji: String, title: String, subtitle: String, modifier: Modifie
 
 private data class Particle(val angle: Float, val speed: Float, val color: Color, val size: Float, val spin: Float)
 
-/** One-shot confetti burst. Change [trigger] to fire. */
+/** One-shot confetti burst. Change [trigger] to fire. Uses pastel palette in dark mode and deep vivid palette in light mode. */
 @Composable
 fun Confetti(trigger: Int, modifier: Modifier = Modifier) {
     if (trigger == 0) return
-    val colors = listOf(Color(0xFFB9A7FF), Color(0xFFFFC7A8), Color(0xFFA8E6CF), Color(0xFFA8D8FF), Color(0xFFFFE08A), Color(0xFFFFB3C8))
-    val particles = remember(trigger) { List(70) { Particle(Random.nextFloat() * 360f, 0.5f + Random.nextFloat(), colors.random(), 6f + Random.nextFloat() * 8f, Random.nextFloat() * 720f) } }
+    val isDark = tidy.dark
+    val colors = if (isDark) {
+        listOf(Color(0xFFB9A7FF), Color(0xFFFFC7A8), Color(0xFFA8E6CF), Color(0xFFA8D8FF), Color(0xFFFFE08A), Color(0xFFFFB3C8))
+    } else {
+        listOf(Color(0xFF6B53F0), Color(0xFFF06430), Color(0xFF149E6B), Color(0xFF1E7FDB), Color(0xFFD99000), Color(0xFFE03A6B))
+    }
+    val particles = remember(trigger, isDark) { List(70) { Particle(Random.nextFloat() * 360f, 0.5f + Random.nextFloat(), colors.random(), 6.5f + Random.nextFloat() * 8.5f, Random.nextFloat() * 720f) } }
     val progress = remember(trigger) { Animatable(0f) }
     LaunchedEffect(trigger) { progress.animateTo(1f, tween(1600, easing = LinearOutSlowInEasing)) }
     if (progress.value >= 1f) return
@@ -296,7 +525,7 @@ fun Confetti(trigger: Int, modifier: Modifier = Modifier) {
             val x = origin.x + (cos(rad) * dist).toFloat()
             val y = origin.y + (sin(rad) * dist).toFloat() + 900f * p * p
             rotate(pt.spin * p, Offset(x, y)) {
-                drawRect(pt.color.copy(alpha = 1f - p), Offset(x, y), Size(pt.size, pt.size * 0.55f))
+                drawRect(pt.color.copy(alpha = (1f - p * 0.85f).coerceIn(0f, 1f)), Offset(x, y), Size(pt.size, pt.size * 0.58f))
             }
         }
     }
