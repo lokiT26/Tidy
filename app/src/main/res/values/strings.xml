@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Tidy</string>
+    <string name="w_todo_desc">Interactive to-do list — check off tasks directly on your home screen</string>
+    <string name="w_ring_desc">Today progress ring and daily streak</string>
+    <string name="w_sticky_desc">Pin a pastel note to your home screen</string>
+    <string name="w_cal_desc">7-day week strip with today\'s tasks</string>
+    <string name="w_quick_desc">One-tap button to add a task or note</string>
+</resources>

@@ -1,0 +1,2 @@
+-keep class com.lokesh.tidy.widget.** { *; }
+-keep class androidx.glance.** { *; }

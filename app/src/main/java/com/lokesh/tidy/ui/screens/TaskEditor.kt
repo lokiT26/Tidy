@@ -1,0 +1,287 @@
+package com.lokesh.tidy.ui.screens
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.dp
+import com.lokesh.tidy.data.Category
+import com.lokesh.tidy.data.Subtask
+import com.lokesh.tidy.data.Task
+import com.lokesh.tidy.data.TaskWithSubtasks
+import com.lokesh.tidy.ui.Dates
+import com.lokesh.tidy.ui.theme.Palette
+import com.lokesh.tidy.ui.theme.tidy
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TaskEditorSheet(
+    initial: TaskWithSubtasks?,
+    categories: List<Category>,
+    defaultDate: Long?,
+    defaultCategory: Long?,
+    onSave: (Task, List<Subtask>) -> Unit,
+    onDelete: ((Task) -> Unit)?,
+    onDismiss: () -> Unit,
+) {
+    val t = tidy
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val base = initial?.task ?: Task(title = "", dueDate = defaultDate, categoryId = defaultCategory)
+    var title by remember { mutableStateOf(base.title) }
+    var notes by remember { mutableStateOf(base.notes) }
+    var dueDate by remember { mutableStateOf(base.dueDate) }
+    var dueTime by remember { mutableStateOf(base.dueTime) }
+    var reminder by remember { mutableStateOf(base.reminderOffset) }
+    var priority by remember { mutableIntStateOf(base.priority) }
+    var categoryId by remember { mutableStateOf(base.categoryId) }
+    var repeat by remember { mutableStateOf(base.repeat) }
+    val subs = remember { mutableStateListOf<Subtask>().apply { addAll(initial?.subtasks?.sortedBy { it.sortOrder } ?: emptyList()) } }
+    var newSub by remember { mutableStateOf("") }
+    var showDate by remember { mutableStateOf(false) }
+    var showTime by remember { mutableStateOf(false) }
+    var showNotes by remember { mutableStateOf(base.notes.isNotBlank()) }
+    val focus = remember { FocusRequester() }
+
+    fun save() {
+        if (title.isBlank()) { onDismiss(); return }
+        val finalSubs = if (newSub.isNotBlank()) subs + Subtask(taskId = 0, title = newSub.trim()) else subs.toList()
+        onSave(base.copy(title = title.trim(), notes = notes.trim(), dueDate = dueDate, dueTime = if (dueDate == null) null else dueTime,
+            reminderOffset = if (dueDate == null) null else reminder, priority = priority, categoryId = categoryId, repeat = if (dueDate == null) "NONE" else repeat), finalSubs)
+    }
+
+    LaunchedEffect(Unit) { if (initial == null) focus.requestFocus() }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheet,
+        containerColor = t.card,
+        shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
+        dragHandle = { Box(Modifier.padding(top = 12.dp, bottom = 4.dp).size(40.dp, 5.dp).clip(CircleShape).background(t.divider)) },
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .padding(horizontal = 22.dp)
+                .padding(bottom = 18.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(if (initial == null) "New task" else "Edit task", style = MaterialTheme.typography.labelLarge, color = t.textMuted, modifier = Modifier.weight(1f))
+                if (initial != null && onDelete != null) {
+                    IconButton(onClick = { onDelete(base) }) { Icon(Icons.Rounded.DeleteOutline, "Delete", tint = Palette.danger) }
+                }
+            }
+            BasicTextField(
+                value = title, onValueChange = { title = it },
+                textStyle = MaterialTheme.typography.headlineSmall.copy(color = t.text),
+                cursorBrush = SolidColor(t.accentStrong),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { save() }),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus).padding(vertical = 6.dp),
+                decorationBox = { inner -> if (title.isEmpty()) Text("What needs doing?", style = MaterialTheme.typography.headlineSmall, color = t.textFaint); inner() }
+            )
+            AnimatedVisibility(showNotes) {
+                BasicTextField(
+                    value = notes, onValueChange = { notes = it },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = t.textMuted),
+                    cursorBrush = SolidColor(t.accentStrong),
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    decorationBox = { inner -> if (notes.isEmpty()) Text("Add details…", style = MaterialTheme.typography.bodyLarge, color = t.textFaint); inner() }
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+            // Date quick picks
+            Label("When")
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val today = Dates.today()
+                item { OptionPill("Today", Icons.Rounded.WbSunny, dueDate == today) { dueDate = if (dueDate == today) null else today } }
+                item { OptionPill("Tomorrow", Icons.Rounded.WbTwilight, dueDate == today + 1) { dueDate = if (dueDate == today + 1) null else today + 1 } }
+                item { OptionPill("Next week", Icons.Rounded.DateRange, dueDate == today + 7) { dueDate = if (dueDate == today + 7) null else today + 7 } }
+                item {
+                    val custom = dueDate != null && dueDate !in listOf(today, today + 1, today + 7)
+                    OptionPill(if (custom) Dates.label(dueDate!!) else "Pick date", Icons.Rounded.CalendarMonth, custom) { showDate = true }
+                }
+                item { OptionPill("Someday", Icons.Rounded.AllInclusive, dueDate == null) { dueDate = null } }
+            }
+            AnimatedVisibility(dueDate != null) {
+                Column {
+                    Spacer(Modifier.height(10.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item { OptionPill(dueTime?.let { Dates.time(it) } ?: "Add time", Icons.Rounded.Schedule, dueTime != null) { showTime = true } }
+                        if (dueTime != null) item { OptionPill("All day", Icons.Rounded.Close, false) { dueTime = null } }
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Label("Remind me")
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val opts = listOf<Int?>(null, 0, 15, 60, 1440)
+                        items(opts) { o ->
+                            val lbl = if (o == 0 && dueTime == null) "9:00 AM" else Dates.reminderLabel(o).replace(" before", "")
+                            OptionPill(if (o == null) "Off" else lbl, if (o == null) Icons.Rounded.NotificationsOff else Icons.Rounded.NotificationsActive, reminder == o) { reminder = o }
+                        }
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Label("Repeat")
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(listOf("NONE", "DAILY", "WEEKDAYS", "WEEKLY", "MONTHLY", "YEARLY")) { r ->
+                            OptionPill(Dates.repeatLabel(r), if (r == "NONE") Icons.Rounded.Block else Icons.Rounded.Repeat, repeat == r) { repeat = r }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Label("Priority")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                (3 downTo 0).forEach { p ->
+                    val c = Palette.priority[p]
+                    val sel = priority == p
+                    Row(
+                        Modifier.clip(RoundedCornerShape(14.dp)).background(if (sel) c.copy(alpha = 0.18f) else t.cardAlt)
+                            .border(1.5.dp, if (sel) c else Color.Transparent, RoundedCornerShape(14.dp))
+                            .clickable { priority = p }.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Rounded.Flag, null, tint = c, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(Palette.priorityNames[p], style = MaterialTheme.typography.labelMedium, color = t.text)
+                    }
+                }
+            }
+
+            if (categories.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                Label("List")
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { OptionPill("Inbox", Icons.Rounded.Inbox, categoryId == null) { categoryId = null } }
+                    items(categories) { c ->
+                        val col = Palette.vivid.getOrElse(c.colorIndex) { Palette.vivid[0] }
+                        val sel = categoryId == c.id
+                        Row(
+                            Modifier.clip(RoundedCornerShape(50)).background(if (sel) col.copy(alpha = 0.2f) else t.cardAlt)
+                                .border(1.5.dp, if (sel) col else Color.Transparent, RoundedCornerShape(50))
+                                .clickable { categoryId = c.id }.padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) { Text("${c.emoji} ${c.name}".trim(), style = MaterialTheme.typography.labelLarge, color = t.text) }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Label("Subtasks")
+            subs.forEachIndexed { i, s ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                    IconButton(onClick = { subs[i] = s.copy(done = !s.done) }, modifier = Modifier.size(34.dp)) {
+                        Icon(if (s.done) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked, null, tint = if (s.done) t.accentStrong else t.textFaint)
+                    }
+                    Text(s.title, style = MaterialTheme.typography.bodyLarge, color = if (s.done) t.textFaint else t.text,
+                        textDecoration = if (s.done) TextDecoration.LineThrough else null, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { subs.removeAt(i) }, modifier = Modifier.size(34.dp)) { Icon(Icons.Rounded.Close, null, tint = t.textFaint, modifier = Modifier.size(18.dp)) }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(t.cardAlt).padding(horizontal = 12.dp, vertical = 10.dp)) {
+                Icon(Icons.Rounded.Add, null, tint = t.textMuted, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                BasicTextField(
+                    value = newSub, onValueChange = { newSub = it },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = t.text),
+                    cursorBrush = SolidColor(t.accentStrong), singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Next),
+                    keyboardActions = KeyboardActions(onNext = { if (newSub.isNotBlank()) { subs.add(Subtask(taskId = 0, title = newSub.trim())); newSub = "" } }),
+                    modifier = Modifier.weight(1f),
+                    decorationBox = { inner -> if (newSub.isEmpty()) Text("Add a step", style = MaterialTheme.typography.bodyLarge, color = t.textFaint); inner() }
+                )
+            }
+
+            Spacer(Modifier.height(20.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!showNotes) {
+                    TextButton(onClick = { showNotes = true }) { Icon(Icons.Rounded.Notes, null); Spacer(Modifier.width(6.dp)); Text("Details") }
+                }
+                Spacer(Modifier.weight(1f))
+                val enabled = title.isNotBlank()
+                Box(
+                    Modifier.clip(RoundedCornerShape(50))
+                        .background(if (enabled) Brush.horizontalGradient(listOf(t.accentStrong, t.accent.partner)) else SolidColor(t.cardAlt))
+                        .clickable(enabled = enabled) { save() }
+                        .padding(horizontal = 28.dp, vertical = 14.dp)
+                ) { Text(if (initial == null) "Add task" else "Save", style = MaterialTheme.typography.titleSmall, color = if (enabled) Color.White else t.textFaint) }
+            }
+        }
+    }
+
+    if (showDate) {
+        val state = rememberDatePickerState(initialSelectedDateMillis = (dueDate ?: Dates.today()) * 86_400_000L)
+        DatePickerDialog(
+            onDismissRequest = { showDate = false },
+            confirmButton = { TextButton(onClick = {
+                state.selectedDateMillis?.let { dueDate = Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().toEpochDay() }
+                showDate = false
+            }) { Text("OK") } },
+            dismissButton = { TextButton(onClick = { showDate = false }) { Text("Cancel") } },
+            colors = DatePickerDefaults.colors(containerColor = t.card)
+        ) { DatePicker(state, colors = DatePickerDefaults.colors(containerColor = t.card)) }
+    }
+    if (showTime) {
+        val init = dueTime ?: (LocalDate.now().let { java.time.LocalTime.now().hour + 1 } * 60)
+        val state = rememberTimePickerState(initialHour = (init / 60) % 24, initialMinute = init % 60)
+        AlertDialog(
+            onDismissRequest = { showTime = false },
+            containerColor = t.card,
+            confirmButton = { TextButton(onClick = { dueTime = state.hour * 60 + state.minute; if (reminder == null) reminder = 0; showTime = false }) { Text("OK") } },
+            dismissButton = { TextButton(onClick = { showTime = false }) { Text("Cancel") } },
+            text = { TimePicker(state) }
+        )
+    }
+}
+
+@Composable
+private fun Label(text: String) {
+    Text(text, style = MaterialTheme.typography.labelMedium, color = tidy.textMuted, modifier = Modifier.padding(bottom = 8.dp, start = 2.dp))
+}
+
+@Composable
+fun OptionPill(text: String, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
+    val t = tidy
+    Row(
+        Modifier.clip(RoundedCornerShape(50))
+            .background(if (selected) t.accentStrong else t.cardAlt)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, null, tint = if (selected) (if (t.dark) Color(0xFF121214) else Color.White) else t.textMuted, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(text, style = MaterialTheme.typography.labelLarge, color = if (selected) (if (t.dark) Color(0xFF121214) else Color.White) else t.text)
+    }
+}
