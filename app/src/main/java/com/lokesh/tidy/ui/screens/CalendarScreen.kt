@@ -2,6 +2,7 @@ package com.lokesh.tidy.ui.screens
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -36,6 +37,7 @@ import com.lokesh.tidy.ui.theme.Palette
 import com.lokesh.tidy.ui.theme.tidy
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import sh.calvin.reorderable.rememberScroller
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
@@ -49,6 +51,7 @@ fun CalendarScreen(
     tasks: List<TaskWithSubtasks>,
     categories: List<Category>,
     selected: LocalDate,
+    resetToTodayTrigger: Int = 0,
     onSelect: (LocalDate) -> Unit,
     onToggle: (Task) -> Unit,
     onOpen: (TaskWithSubtasks) -> Unit,
@@ -85,7 +88,40 @@ fun CalendarScreen(
     }
 
     val listState = rememberLazyListState()
-    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+    LaunchedEffect(resetToTodayTrigger) {
+        if (resetToTodayTrigger > 0) {
+            listState.animateScrollToItem(0)
+        }
+    }
+
+    val boundedScrollState = remember(listState) {
+        object : ScrollableState by listState {
+            private fun validKeys(): List<String> = when (activeGroup) {
+                "allday" -> allDay.filter { !it.task.completed }.map { "a_${it.task.id}" }
+                "timed" -> timed.filter { !it.task.completed && it.task.dueTime == activeTime }.map { "t_${it.task.id}" }
+                else -> emptyList()
+            }
+            override val canScrollForward: Boolean
+                get() {
+                    val lastKey = validKeys().lastOrNull() ?: return false
+                    val info = listState.layoutInfo
+                    val item = info.visibleItemsInfo.find { it.key == lastKey }
+                    return listState.canScrollForward && (item == null || (item.offset + item.size) > info.viewportEndOffset)
+                }
+            override val canScrollBackward: Boolean
+                get() {
+                    val firstKey = validKeys().firstOrNull() ?: return false
+                    val info = listState.layoutInfo
+                    val item = info.visibleItemsInfo.find { it.key == firstKey }
+                    return listState.canScrollBackward && (item == null || item.offset < info.viewportStartOffset)
+                }
+        }
+    }
+    val scroller = rememberScroller(boundedScrollState, (listState.layoutInfo.viewportSize.height * 0.05f).coerceAtLeast(24f))
+    val reorderState = rememberReorderableLazyListState(
+        lazyListState = listState,
+        scroller = scroller,
+    ) { from, to ->
         val fk = from.key as? String ?: return@rememberReorderableLazyListState
         val tk = to.key as? String ?: return@rememberReorderableLazyListState
         if (fk.startsWith("a_") && tk.startsWith("a_")) {
@@ -108,7 +144,7 @@ fun CalendarScreen(
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 140.dp),
+        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 0.dp),
     ) {
         item(key = "header") {
             Row(Modifier.fillMaxWidth().statusBarsPadding().padding(top = 18.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -272,6 +308,9 @@ fun CalendarScreen(
                     }
                 }
             }
+        }
+        item(key = "bottom_spacer") {
+            Spacer(Modifier.height(140.dp))
         }
     }
 }

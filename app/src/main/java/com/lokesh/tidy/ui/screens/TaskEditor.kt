@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.lokesh.tidy.data.Category
@@ -38,10 +39,12 @@ import com.lokesh.tidy.data.Task
 import com.lokesh.tidy.data.TaskWithSubtasks
 import com.lokesh.tidy.ui.Dates
 import com.lokesh.tidy.ui.components.ConfirmDeleteButton
+import com.lokesh.tidy.ui.components.SelectChip
 import com.lokesh.tidy.ui.theme.Palette
 import com.lokesh.tidy.ui.theme.tidy
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneOffset
 
 private const val MAX_TITLE = 150
@@ -81,12 +84,22 @@ fun TaskEditorSheet(
     var newSub by remember { mutableStateOf("") }
     var showDate by remember { mutableStateOf(false) }
     var showTime by remember { mutableStateOf(false) }
+    var showCustomReminder by remember { mutableStateOf(false) }
     var showNotes by remember { mutableStateOf(base.notes.isNotBlank()) }
     val focus = remember { FocusRequester() }
 
+    fun ensureFutureDefaultTimeIfToday() {
+        val now = LocalTime.now()
+        val nowMin = now.hour * 60 + now.minute
+        if (dueDate == Dates.today() && dueTime == null && nowMin >= 9 * 60) {
+            dueTime = ((now.hour + 1).coerceAtMost(23)) * 60
+        }
+    }
+
     fun save() {
         if (title.isBlank()) { onDismiss(); return }
-        val finalSubs = if (newSub.isNotBlank()) subs + Subtask(taskId = 0, title = newSub.trim().take(MAX_SUBTASK)) else subs.toList()
+        val cleanedSubs = subs.map { it.copy(title = it.title.trim().take(MAX_SUBTASK)) }.filter { it.title.isNotEmpty() }
+        val finalSubs = if (newSub.isNotBlank()) cleanedSubs + Subtask(taskId = 0, title = newSub.trim().take(MAX_SUBTASK)) else cleanedSubs
         onSave(base.copy(title = title.trim().take(MAX_TITLE), notes = notes.trim().take(MAX_NOTES), dueDate = dueDate, dueTime = if (dueDate == null) null else dueTime,
             reminderOffset = if (dueDate == null) null else reminder, priority = priority, categoryId = categoryId, repeat = if (dueDate == null) "NONE" else repeat), finalSubs)
     }
@@ -169,11 +182,29 @@ fun TaskEditorSheet(
                     }
                     Spacer(Modifier.height(14.dp))
                     Label("Remind me")
+                    val presets = listOf<Int?>(null, 0, 15, 60, 1440)
+                    val isCustomReminder = reminder != null && reminder !in presets
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val opts = listOf<Int?>(null, 0, 15, 60, 1440)
-                        items(opts) { o ->
+                        items(presets) { o ->
                             val lbl = if (o == 0 && dueTime == null) "9:00 AM" else Dates.reminderLabel(o).replace(" before", "")
-                            OptionPill(if (o == null) "Off" else lbl, if (o == null) Icons.Rounded.NotificationsOff else Icons.Rounded.NotificationsActive, reminder == o) { reminder = o }
+                            OptionPill(
+                                text = if (o == null) "Off" else lbl,
+                                icon = if (o == null) Icons.Rounded.NotificationsOff else Icons.Rounded.NotificationsActive,
+                                selected = reminder == o
+                            ) {
+                                reminder = o
+                                if (o != null) ensureFutureDefaultTimeIfToday()
+                            }
+                        }
+                        item {
+                            val customText = if (isCustomReminder) {
+                                "Custom · " + Dates.reminderLabel(reminder).replace(" before", "")
+                            } else "Custom…"
+                            OptionPill(
+                                text = customText,
+                                icon = Icons.Rounded.Tune,
+                                selected = isCustomReminder
+                            ) { showCustomReminder = true }
                         }
                     }
                     Spacer(Modifier.height(14.dp))
@@ -229,8 +260,23 @@ fun TaskEditorSheet(
                     IconButton(onClick = { subs[i] = s.copy(done = !s.done) }, modifier = Modifier.size(34.dp)) {
                         Icon(if (s.done) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked, null, tint = if (s.done) t.accentStrong else t.textFaint)
                     }
-                    Text(s.title, style = MaterialTheme.typography.bodyLarge, color = if (s.done) t.textFaint else t.text,
-                        textDecoration = if (s.done) TextDecoration.LineThrough else null, modifier = Modifier.weight(1f))
+                    BasicTextField(
+                        value = s.title,
+                        onValueChange = { updated -> if (updated.length <= MAX_SUBTASK) subs[i] = s.copy(title = updated) },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(
+                            color = if (s.done) t.textFaint else t.text,
+                            textDecoration = if (s.done) TextDecoration.LineThrough else null
+                        ),
+                        cursorBrush = SolidColor(t.accentStrong),
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
+                        modifier = Modifier.weight(1f).padding(vertical = 4.dp),
+                    )
+                    if (s.title.length >= MAX_SUBTASK * 3 / 4) {
+                        Text("${s.title.length}/$MAX_SUBTASK", style = MaterialTheme.typography.labelSmall,
+                            color = if (s.title.length >= MAX_SUBTASK) Palette.danger else t.textFaint,
+                            modifier = Modifier.padding(horizontal = 4.dp))
+                    }
                     IconButton(onClick = { subs.removeAt(i) }, modifier = Modifier.size(34.dp)) { Icon(Icons.Rounded.Close, null, tint = t.textFaint, modifier = Modifier.size(18.dp)) }
                 }
             }
@@ -282,7 +328,7 @@ fun TaskEditorSheet(
         ) { DatePicker(state, colors = DatePickerDefaults.colors(containerColor = t.card)) }
     }
     if (showTime) {
-        val init = dueTime ?: (LocalDate.now().let { java.time.LocalTime.now().hour + 1 } * 60)
+        val init = dueTime ?: ((LocalTime.now().hour + 1).coerceAtMost(23) * 60)
         val state = rememberTimePickerState(initialHour = (init / 60) % 24, initialMinute = init % 60)
         AlertDialog(
             onDismissRequest = { showTime = false },
@@ -290,6 +336,66 @@ fun TaskEditorSheet(
             confirmButton = { TextButton(onClick = { dueTime = state.hour * 60 + state.minute; if (reminder == null) reminder = 0; showTime = false }) { Text("OK") } },
             dismissButton = { TextButton(onClick = { showTime = false }) { Text("Cancel") } },
             text = { TimePicker(state) }
+        )
+    }
+    if (showCustomReminder) {
+        val initMin = reminder ?: 10
+        val initUnit = when {
+            initMin > 0 && initMin % 1440 == 0 -> 2 // Days
+            initMin > 0 && initMin % 60 == 0 -> 1   // Hours
+            else -> 0                               // Minutes
+        }
+        val initVal = when (initUnit) {
+            2 -> (initMin / 1440).coerceAtLeast(1)
+            1 -> (initMin / 60).coerceAtLeast(1)
+            else -> initMin.coerceAtLeast(1)
+        }
+        var amountText by remember { mutableStateOf(initVal.toString()) }
+        var unit by remember { mutableIntStateOf(initUnit) } // 0 = min, 1 = hr, 2 = day
+
+        AlertDialog(
+            onDismissRequest = { showCustomReminder = false },
+            containerColor = t.card,
+            shape = RoundedCornerShape(28.dp),
+            title = { Text("Custom reminder", style = MaterialTheme.typography.titleLarge) },
+            text = {
+                Column {
+                    Text(
+                        if (dueTime != null) "Remind before ${Dates.time(dueTime!!)}"
+                        else "Remind before 9:00 AM (or add a due time)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = t.textMuted
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    OutlinedTextField(
+                        value = amountText,
+                        onValueChange = { v -> if (v.all { it.isDigit() } && v.length <= 3) amountText = v },
+                        singleLine = true,
+                        label = { Text("How long before?") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Minutes", "Hours", "Days").forEachIndexed { idx, label ->
+                            SelectChip(label, unit == idx) { unit = idx }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val n = amountText.toIntOrNull()?.coerceIn(1, 999) ?: 10
+                    val multiplier = when (unit) { 2 -> 1440; 1 -> 60; else -> 1 }
+                    reminder = n * multiplier
+                    ensureFutureDefaultTimeIfToday()
+                    showCustomReminder = false
+                }) { Text("Set reminder") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCustomReminder = false }) { Text("Cancel") }
+            }
         )
     }
 }

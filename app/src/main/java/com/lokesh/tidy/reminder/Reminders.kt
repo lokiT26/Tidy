@@ -30,25 +30,42 @@ object Reminders {
     const val ACTION_SNOOZE = "com.lokesh.tidy.SNOOZE"
     const val ACTION_MIDNIGHT = "com.lokesh.tidy.MIDNIGHT"
 
-    fun triggerTime(t: Task): Long? {
+    fun dueTimeMillis(t: Task): Long? {
         val date = t.dueDate ?: return null
-        val offset = t.reminderOffset ?: return null
-        val minutes = (t.dueTime ?: 9 * 60) - offset
+        val minutes = t.dueTime ?: (9 * 60)
         val ldt = LocalDate.ofEpochDay(date).atStartOfDay().plusMinutes(minutes.toLong())
         return ldt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
     }
 
+    fun triggerTime(t: Task): Long? {
+        val due = dueTimeMillis(t) ?: return null
+        val offset = t.reminderOffset ?: return null
+        return due - offset * 60_000L
+    }
+
     private fun pending(context: Context, id: Long, flags: Int = PendingIntent.FLAG_UPDATE_CURRENT): PendingIntent? {
-        val i = Intent(context, ReminderReceiver::class.java).setAction(ACTION_FIRE).putExtra(EXTRA_ID, id)
+        val i = Intent(context, ReminderReceiver::class.java)
+            .setAction(ACTION_FIRE)
+            .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+            .putExtra(EXTRA_ID, id)
         return PendingIntent.getBroadcast(context, id.toInt(), i, flags or PendingIntent.FLAG_IMMUTABLE)
     }
 
     fun schedule(context: Context, t: Task) {
         cancel(context, t.id)
         if (t.completed) return
-        val at = triggerTime(t) ?: return
-        if (at <= System.currentTimeMillis()) return
-        scheduleAt(context, t, at)
+        val rawAt = triggerTime(t) ?: return
+        val dueAt = dueTimeMillis(t) ?: rawAt
+        val now = System.currentTimeMillis()
+        // Handle same-minute scheduling and "offset already passed, but due time still ahead"
+        val effectiveAt = when {
+            rawAt > now -> rawAt
+            rawAt >= now - 60_000L -> now + 2_000L
+            dueAt > now -> dueAt
+            dueAt >= now - 60_000L -> now + 2_000L
+            else -> return
+        }
+        scheduleAt(context, t, effectiveAt)
     }
 
     fun scheduleAt(context: Context, t: Task, at: Long) {
@@ -88,7 +105,7 @@ object Reminders {
     fun show(context: Context, t: Task) {
         ensureChannel(context)
         val open = PendingIntent.getActivity(context, t.id.toInt(), Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        fun action(a: String) = PendingIntent.getBroadcast(context, (t.id * 10 + a.length).toInt(), Intent(context, ReminderReceiver::class.java).setAction(a).putExtra(EXTRA_ID, t.id), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        fun action(a: String) = PendingIntent.getBroadcast(context, (t.id * 10 + a.length).toInt(), Intent(context, ReminderReceiver::class.java).setAction(a).addFlags(Intent.FLAG_RECEIVER_FOREGROUND).putExtra(EXTRA_ID, t.id), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val n = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_tidy)
             .setColor(0xFF7C6CF2.toInt())

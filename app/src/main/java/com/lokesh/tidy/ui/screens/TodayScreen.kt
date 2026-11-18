@@ -1,6 +1,7 @@
 package com.lokesh.tidy.ui.screens
 
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -36,6 +37,7 @@ import com.lokesh.tidy.ui.theme.Palette
 import com.lokesh.tidy.ui.theme.tidy
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import sh.calvin.reorderable.rememberScroller
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -109,7 +111,39 @@ fun TodayScreen(
     LaunchedEffect(computed) { if (activeDragRow == null) rows = computed }
 
     val listState = rememberLazyListState()
-    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+    // Bound auto-scrolling strictly to the active dragged task's (section, dueDate) range
+    // so hovering over another section (such as expanded Completed) never triggers Scroller or moveDraggingItemToEnd.
+    val boundedScrollState = remember(listState) {
+        object : ScrollableState by listState {
+            override val canScrollForward: Boolean
+                get() {
+                    val drag = activeDragRow ?: return false
+                    val valid = rows.filterIsInstance<TaskRow>().filter {
+                        it.section == drag.section && it.item.task.dueDate == drag.item.task.dueDate
+                    }
+                    val lastKey = valid.lastOrNull()?.key ?: return false
+                    val info = listState.layoutInfo
+                    val item = info.visibleItemsInfo.find { it.key == lastKey }
+                    return listState.canScrollForward && (item == null || (item.offset + item.size) > info.viewportEndOffset)
+                }
+            override val canScrollBackward: Boolean
+                get() {
+                    val drag = activeDragRow ?: return false
+                    val valid = rows.filterIsInstance<TaskRow>().filter {
+                        it.section == drag.section && it.item.task.dueDate == drag.item.task.dueDate
+                    }
+                    val firstKey = valid.firstOrNull()?.key ?: return false
+                    val info = listState.layoutInfo
+                    val item = info.visibleItemsInfo.find { it.key == firstKey }
+                    return listState.canScrollBackward && (item == null || item.offset < info.viewportStartOffset)
+                }
+        }
+    }
+    val scroller = rememberScroller(boundedScrollState, (listState.layoutInfo.viewportSize.height * 0.05f).coerceAtLeast(24f))
+    val reorderState = rememberReorderableLazyListState(
+        lazyListState = listState,
+        scroller = scroller,
+    ) { from, to ->
         val fromIdx = rows.indexOfFirst { it.key == from.key }
         val toIdx = rows.indexOfFirst { it.key == to.key }
         if (fromIdx < 0 || toIdx < 0) return@rememberReorderableLazyListState
@@ -124,7 +158,7 @@ fun TodayScreen(
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 0.dp, bottom = 140.dp),
+            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 0.dp, bottom = 0.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             item(key = "greeting") { Greeting(name, onSearch, onSettings) }
@@ -225,6 +259,9 @@ fun TodayScreen(
                         }
                     }
                 }
+            }
+            item(key = "bottom_spacer") {
+                Spacer(Modifier.height(140.dp))
             }
         }
         Confetti(confetti)

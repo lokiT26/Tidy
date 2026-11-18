@@ -121,6 +121,7 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
     var editingTask by remember { mutableStateOf<TaskWithSubtasks?>(null) }
     var newTask by remember { mutableStateOf(false) }
     var calendarDay by remember { mutableStateOf(LocalDate.now()) }
+    var calendarResetTrigger by remember { mutableIntStateOf(0) }
     var selectedCategory by rememberSaveable { mutableStateOf<Long?>(null) }
     var editCategory by remember { mutableStateOf<Category?>(null) }
     var showCategoryDialog by remember { mutableStateOf(false) }
@@ -195,7 +196,9 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
                     onAddCategory = { editCategory = null; showCategoryDialog = true },
                 )
                 1 -> CalendarScreen(
-                    tasks = tasks, categories = categories, selected = calendarDay, onSelect = { calendarDay = it },
+                    tasks = tasks, categories = categories, selected = calendarDay,
+                    resetToTodayTrigger = calendarResetTrigger,
+                    onSelect = { calendarDay = it },
                     onToggle = ::toggle, onOpen = { editingTask = it }, onDelete = ::deleteWithUndo,
                     onSubtask = { vm.toggleSubtask(it) }, onReorder = { vm.reorder(it) }
                 )
@@ -222,7 +225,14 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 NavItem(todayNavIcon, "Today", tab == 0) { tab = 0 }
-                NavItem(Icons.Rounded.CalendarMonth, "Calendar", tab == 1) { tab = 1 }
+                NavItem(Icons.Rounded.CalendarMonth, "Calendar", tab == 1) {
+                    if (tab == 1) {
+                        calendarDay = LocalDate.now()
+                        calendarResetTrigger++
+                    } else {
+                        tab = 1
+                    }
+                }
                 NavItem(Icons.AutoMirrored.Rounded.StickyNote2, "Notes", tab == 2) { tab = 2 }
                 NavItem(Icons.Rounded.Insights, "Stats", tab == 3) { tab = 3 }
             }

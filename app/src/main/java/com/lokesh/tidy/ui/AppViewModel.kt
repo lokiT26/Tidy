@@ -67,7 +67,13 @@ object Dates {
     fun repeatLabel(r: String) = when (r) {
         "DAILY" -> "Daily"; "WEEKDAYS" -> "Weekdays"; "WEEKLY" -> "Weekly"; "MONTHLY" -> "Monthly"; "YEARLY" -> "Yearly"; else -> "Never"
     }
-    fun reminderLabel(o: Int?) = when (o) {
-        null -> "No reminder"; 0 -> "At time"; 5 -> "5 min before"; 15 -> "15 min before"; 30 -> "30 min before"; 60 -> "1 hour before"; 1440 -> "1 day before"; else -> "$o min before"
+    fun reminderLabel(o: Int?) = when {
+        o == null -> "No reminder"
+        o == 0 -> "At time"
+        o == 1440 -> "1 day before"
+        o > 1440 && o % 1440 == 0 -> "${o / 1440} days before"
+        o == 60 -> "1 hour before"
+        o > 60 && o % 60 == 0 -> "${o / 60} hr before"
+        else -> "$o min before"
     }
 }

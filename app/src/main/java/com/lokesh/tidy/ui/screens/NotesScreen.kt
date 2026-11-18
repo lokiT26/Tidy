@@ -5,6 +5,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -41,6 +42,7 @@ import com.lokesh.tidy.ui.theme.Palette
 import com.lokesh.tidy.ui.theme.tidy
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyStaggeredGridState
+import sh.calvin.reorderable.rememberScroller
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -85,7 +87,34 @@ fun NotesScreen(
     }
 
     val gridState = rememberLazyStaggeredGridState()
-    val reorderState = rememberReorderableLazyStaggeredGridState(gridState) { from, to ->
+    val boundedScrollState = remember(gridState) {
+        object : ScrollableState by gridState {
+            private fun validKeys(): List<String> = when (activePinned) {
+                true -> pinned.map { "p_${it.id}" }
+                false -> others.map { "o_${it.id}" }
+                null -> emptyList()
+            }
+            override val canScrollForward: Boolean
+                get() {
+                    val lastKey = validKeys().lastOrNull() ?: return false
+                    val info = gridState.layoutInfo
+                    val item = info.visibleItemsInfo.find { it.key == lastKey }
+                    return gridState.canScrollForward && (item == null || (item.offset.y + item.size.height) > info.viewportEndOffset)
+                }
+            override val canScrollBackward: Boolean
+                get() {
+                    val firstKey = validKeys().firstOrNull() ?: return false
+                    val info = gridState.layoutInfo
+                    val item = info.visibleItemsInfo.find { it.key == firstKey }
+                    return gridState.canScrollBackward && (item == null || item.offset.y < info.viewportStartOffset)
+                }
+        }
+    }
+    val scroller = rememberScroller(boundedScrollState, (gridState.layoutInfo.viewportSize.height * 0.05f).coerceAtLeast(24f))
+    val reorderState = rememberReorderableLazyStaggeredGridState(
+        lazyStaggeredGridState = gridState,
+        scroller = scroller,
+    ) { from, to ->
         val fk = from.key as? String ?: return@rememberReorderableLazyStaggeredGridState
         val tk = to.key as? String ?: return@rememberReorderableLazyStaggeredGridState
         if (fk.startsWith("p_") && tk.startsWith("p_")) {
@@ -109,7 +138,7 @@ fun NotesScreen(
         columns = StaggeredGridCells.Fixed(2),
         state = gridState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 140.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 0.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalItemSpacing = 12.dp,
     ) {
@@ -183,6 +212,9 @@ fun NotesScreen(
                     )
                 }
             }
+        }
+        item(key = "bottom_spacer", span = StaggeredGridItemSpan.FullLine) {
+            Spacer(Modifier.height(140.dp))
         }
     }
 }
