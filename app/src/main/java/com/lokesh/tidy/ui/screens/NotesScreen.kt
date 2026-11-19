@@ -49,14 +49,34 @@ import java.util.Locale
 
 data class CheckItem(val done: Boolean, val text: String)
 
-fun parseChecklist(content: String): List<CheckItem> = content.lines().filter { it.isNotEmpty() }.map {
-    when {
-        it.startsWith("[x] ") -> CheckItem(true, it.removePrefix("[x] "))
-        it.startsWith("[ ] ") -> CheckItem(false, it.removePrefix("[ ] "))
-        else -> CheckItem(false, it)
+private const val IN_ITEM_NL = "\u200B\n"
+
+fun parseChecklist(content: String): List<CheckItem> {
+    if (content.isBlank()) return emptyList()
+    val lines = content.replace(IN_ITEM_NL, "\n").lines()
+    val hasMarkers = lines.any { it.startsWith("[x] ") || it.startsWith("[ ] ") }
+    if (!hasMarkers) {
+        return content.split("\n").map { it.replace("\u200B", "") }.filter { it.isNotEmpty() }.map { CheckItem(false, it) }
     }
+    val result = mutableListOf<CheckItem>()
+    for (raw in lines) {
+        val line = raw.replace("\u200B", "")
+        when {
+            line.startsWith("[x] ") -> result.add(CheckItem(true, line.removePrefix("[x] ")))
+            line.startsWith("[ ] ") -> result.add(CheckItem(false, line.removePrefix("[ ] ")))
+            result.isNotEmpty() -> {
+                val last = result.removeAt(result.lastIndex)
+                result.add(last.copy(text = if (line.isEmpty()) last.text else "${last.text}\n$line"))
+            }
+            line.isNotEmpty() -> result.add(CheckItem(false, line))
+        }
+    }
+    return result
 }
-fun serializeChecklist(items: List<CheckItem>) = items.joinToString("\n") { (if (it.done) "[x] " else "[ ] ") + it.text }
+
+fun serializeChecklist(items: List<CheckItem>) = items.joinToString("\n") {
+    (if (it.done) "[x] " else "[ ] ") + it.text.replace("\u200B", "")
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -285,9 +305,14 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
     var pinned by remember { mutableStateOf(initial.pinned) }
     var checklist by remember { mutableStateOf(initial.isChecklist) }
     val items = remember { mutableStateListOf<CheckItem>().apply { if (initial.isChecklist) addAll(parseChecklist(initial.content)) } }
+    val savedDoneStates = remember { mutableMapOf<String, Boolean>() }
     var newItem by remember { mutableStateOf("") }
 
-    fun currentContent() = if (checklist) serializeChecklist(items + listOfNotNull(newItem.takeIf { it.isNotBlank() }?.let { CheckItem(false, it) })) else content
+    fun currentContent() = if (checklist) {
+        serializeChecklist(items + listOfNotNull(newItem.takeIf { it.isNotBlank() }?.let { CheckItem(false, it) }))
+    } else {
+        content.replace("\u200B", "")
+    }
     fun close() {
         val c = currentContent()
         val changed = title != initial.title || c != initial.content || color != initial.colorIndex || pinned != initial.pinned || checklist != initial.isChecklist
@@ -307,8 +332,24 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
                 IconButton(onClick = { close() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = fg) }
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = {
-                    if (!checklist) { items.clear(); items.addAll(content.lines().filter { it.isNotBlank() }.map { CheckItem(false, it.trim()) }) }
-                    else { content = items.joinToString("\n") { it.text } }
+                    if (!checklist) {
+                        // Switching Simple Text -> Checklist: split only on real newlines, keeping \u200B\n inside the same item
+                        val parsed = content
+                            .replace(IN_ITEM_NL, "\u0000")
+                            .split("\n")
+                            .map { it.replace("\u0000", "\n").replace("\u200B", "").trim() }
+                            .filter { it.isNotBlank() }
+                            .map { txt -> CheckItem(savedDoneStates[txt] ?: false, txt) }
+                        items.clear()
+                        items.addAll(parsed)
+                    } else {
+                        // Switching Checklist -> Simple Text: encode in-item newlines with invisible \u200B\n so multi-line items stay grouped
+                        val allItems = items + listOfNotNull(newItem.takeIf { it.isNotBlank() }?.let { CheckItem(false, it.trim()) })
+                        newItem = ""
+                        savedDoneStates.clear()
+                        allItems.forEach { savedDoneStates[it.text.replace("\u200B", "").trim()] = it.done }
+                        content = allItems.joinToString("\n") { it.text.replace("\u200B", "").replace("\n", IN_ITEM_NL) }
+                    }
                     checklist = !checklist
                 }) { Icon(if (checklist) Icons.AutoMirrored.Rounded.Notes else Icons.Rounded.Checklist, "Checklist", tint = fg) }
                 IconButton(onClick = { pinned = !pinned }) { Icon(Icons.Rounded.PushPin, "Pin", tint = if (pinned) t.accentStrong else fg.copy(alpha = 0.45f)) }

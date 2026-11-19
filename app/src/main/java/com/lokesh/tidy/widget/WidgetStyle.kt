@@ -3,8 +3,9 @@ package com.lokesh.tidy.widget
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.*
-import com.lokesh.tidy.R
 import com.lokesh.tidy.ui.theme.Palette
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlin.math.roundToInt
 
 enum class WidgetKind(val title: String, val subtitle: String, val receiver: Class<*>) {
@@ -16,11 +17,14 @@ enum class WidgetKind(val title: String, val subtitle: String, val receiver: Cla
 }
 
 data class WidgetCfg(
-    /** 0 = solid, 1 = gradient, 2 = frosted glass, 3 = pastel card */
+    /**
+     * For non-Sticky widgets: 0 = Solid, 1 = Gradient, 2 = Frosted glass, 3 = Pastel
+     * For Sticky widget: 0 = Note colour, 1 = Solid, 2 = Gradient, 3 = Frosted glass, 4 = Pastel
+     */
     val bgStyle: Int = 0,
-    /** 0..100 */
+    /** 20..100 */
     val opacity: Int = 92,
-    /** 12..36 dp */
+    /** 8..38 dp */
     val radius: Int = 26,
     /** 0 = system, 1 = light, 2 = dark, 3 = amoled */
     val theme: Int = 0,
@@ -33,9 +37,17 @@ data class WidgetCfg(
     /** 0 = comfortable, 1 = compact */
     val density: Int = 0,
     val showCompleted: Boolean = false,
-    /** -1 = all, -2 = today only, >=0 = categoryId */
+    /**
+     * -1 = All Tasks (Overdue + Today + Upcoming + Someday)
+     * -2 = Today + Overdue
+     * -3 = Today only
+     * -4 = Today + Someday
+     * -5 = Upcoming
+     * -6 = Someday only
+     * >=0 = specific categoryId
+     */
     val listFilter: Long = -2L,
-    /** For sticky widget */
+    /** For sticky widget: -1L = Latest note (auto), >0 = specific noteId */
     val noteId: Long = -1L,
     /** For quick widget: 0 = new task, 1 = new note */
     val quickAction: Int = 0,
@@ -48,6 +60,13 @@ data class WidgetCfg(
 }
 
 object WidgetPrefs {
+    private val _version = MutableStateFlow(System.nanoTime())
+    val version: StateFlow<Long> = _version
+
+    fun bump() {
+        _version.value = System.nanoTime()
+    }
+
     private fun sp(ctx: Context) = ctx.getSharedPreferences("widget_cfg", Context.MODE_PRIVATE)
 
     fun load(ctx: Context, id: Int): WidgetCfg {
@@ -70,6 +89,7 @@ object WidgetPrefs {
     }
 
     fun save(ctx: Context, id: Int, c: WidgetCfg) {
+        // Use commit() (synchronous) so Glance immediately reads the new values without any race condition
         sp(ctx).edit()
             .putInt("bg_$id", c.bgStyle)
             .putInt("op_$id", c.opacity)
@@ -83,7 +103,8 @@ object WidgetPrefs {
             .putLong("lf_$id", c.listFilter)
             .putLong("nt_$id", c.noteId)
             .putInt("qa_$id", c.quickAction)
-            .apply()
+            .commit()
+        bump()
     }
 }
 
@@ -95,7 +116,24 @@ object WidgetArt {
     private fun Int.withAlpha(a: Float): Int = Color.argb((a.coerceIn(0f, 1f) * 255).roundToInt(), Color.red(this), Color.green(this), Color.blue(this))
     private fun androidx.compose.ui.graphics.Color.argb(): Int = Color.argb((alpha * 255).roundToInt(), (red * 255).roundToInt(), (green * 255).roundToInt(), (blue * 255).roundToInt())
 
-    fun cardBitmap(ctx: Context, cfg: WidgetCfg, wDp: Float = 320f, hDp: Float = 240f, noteColorIdx: Int? = null): Bitmap {
+    /**
+     * Resolves the effective style index (0=Solid, 1=Gradient, 2=Glass, 3=Pastel, -1=NoteColor)
+     */
+    fun effectiveStyle(cfg: WidgetCfg, isSticky: Boolean): Int {
+        return if (isSticky) {
+            when (cfg.bgStyle) {
+                0 -> -1 // Note colour
+                1 -> 0  // Solid
+                2 -> 1  // Gradient
+                3 -> 2  // Frosted glass
+                else -> 3 // Pastel
+            }
+        } else {
+            cfg.bgStyle.coerceIn(0, 3)
+        }
+    }
+
+    fun cardBitmap(ctx: Context, cfg: WidgetCfg, wDp: Float = 320f, hDp: Float = 240f, noteColorIdx: Int? = null, isSticky: Boolean = false): Bitmap {
         val dm = ctx.resources.displayMetrics
         val w = (wDp * dm.density).roundToInt().coerceIn(160, 900)
         val h = (hDp * dm.density).roundToInt().coerceIn(160, 900)
@@ -105,14 +143,22 @@ object WidgetArt {
         val rect = RectF(1.5f, 1.5f, w - 1.5f, h - 1.5f)
         val dark = cfg.isDark(ctx)
         val a = Palette.accents.getOrElse(cfg.accent) { Palette.accents[0] }
-        val alpha = cfg.opacity / 100f
+        val alpha = (cfg.opacity.coerceIn(20, 100)) / 100f
+        val style = effectiveStyle(cfg, isSticky)
 
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        if (noteColorIdx != null && noteColorIdx > 0) {
-            val base = Palette.noteColor(noteColorIdx, dark).argb()
-            p.color = base.withAlpha(alpha)
-            c.drawRoundRect(rect, r, r, p)
-        } else when (cfg.bgStyle) {
+        when (style) {
+            -1 -> { // Note colour (adapts to Light / Dark / AMOLED theme + opacity)
+                val idx = (noteColorIdx ?: 0).coerceIn(0, Palette.pastels.lastIndex)
+                val base = when {
+                    cfg.theme == 3 && idx == 0 -> Color.BLACK
+                    cfg.theme == 3 -> Palette.noteColor(idx, true).argb()
+                    idx == 0 && !dark -> 0xFFFFF8E1.toInt() // warm sticky yellow if note is default white in light mode
+                    else -> Palette.noteColor(idx, dark).argb()
+                }
+                p.color = base.withAlpha(alpha)
+                c.drawRoundRect(rect, r, r, p)
+            }
             0 -> { // Solid
                 val base = when { cfg.theme == 3 -> Color.BLACK; dark -> 0xFF1C1C22.toInt(); else -> Color.WHITE }
                 p.color = base.withAlpha(alpha)
@@ -120,32 +166,36 @@ object WidgetArt {
             }
             1 -> { // Gradient
                 val c1 = (if (dark) a.strong else a.pastel).argb().withAlpha(alpha)
-                val c2 = (if (dark) 0xFF1E192A.toInt() else a.partner.argb()).withAlpha(alpha)
+                val c2 = (if (cfg.theme == 3) Color.BLACK else if (dark) 0xFF1E192A.toInt() else a.partner.argb()).withAlpha(alpha)
                 p.shader = LinearGradient(0f, 0f, w.toFloat(), h.toFloat(), c1, c2, Shader.TileMode.CLAMP)
                 c.drawRoundRect(rect, r, r, p)
             }
             2 -> { // Frosted glass
-                val base = (if (dark) 0xFF22222B.toInt() else Color.WHITE).withAlpha((alpha * 0.78f).coerceAtMost(0.92f))
+                val base = (if (cfg.theme == 3) 0xFF0A0A0E.toInt() else if (dark) 0xFF22222B.toInt() else Color.WHITE).withAlpha((alpha * 0.78f).coerceAtMost(0.92f))
                 p.color = base
                 c.drawRoundRect(rect, r, r, p)
-                p.shader = LinearGradient(0f, 0f, w.toFloat(), h.toFloat(), a.pastel.argb().withAlpha(0.25f * alpha), a.partner.argb().withAlpha(0.18f * alpha), Shader.TileMode.CLAMP)
+                p.shader = LinearGradient(0f, 0f, w.toFloat(), h.toFloat(), a.pastel.argb().withAlpha(0.28f * alpha), a.partner.argb().withAlpha(0.20f * alpha), Shader.TileMode.CLAMP)
                 c.drawRoundRect(rect, r, r, p)
-                p.shader = LinearGradient(0f, 0f, 0f, h * 0.5f, Color.WHITE.withAlpha(if (dark) 0.10f else 0.55f), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+                p.shader = LinearGradient(0f, 0f, 0f, h * 0.5f, Color.WHITE.withAlpha(if (dark) 0.12f else 0.55f), Color.TRANSPARENT, Shader.TileMode.CLAMP)
                 c.drawRoundRect(rect, r, r, p)
             }
-            else -> { // Pastel
-                val base = (if (dark) 0xFF252030.toInt() else a.soft.argb()).withAlpha(alpha)
+            else -> { // Pastel (accent-tinted soft card)
+                val base = (if (cfg.theme == 3) 0xFF12101B.toInt() else if (dark) 0xFF252030.toInt() else a.soft.argb()).withAlpha(alpha)
                 p.color = base
                 c.drawRoundRect(rect, r, r, p)
+                if (dark) {
+                    p.color = a.strong.argb().withAlpha(0.18f * alpha)
+                    c.drawRoundRect(rect, r, r, p)
+                }
             }
         }
         // Subtle border
         val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
+            this.style = Paint.Style.STROKE
             strokeWidth = 1.2f * dm.density
             shader = LinearGradient(0f, 0f, 0f, h.toFloat(),
-                Color.WHITE.withAlpha(if (dark) 0.16f else 0.75f),
-                (if (dark) Color.WHITE else 0xFFD8D4CE.toInt()).withAlpha(if (dark) 0.04f else 0.35f),
+                Color.WHITE.withAlpha(if (dark) 0.18f else 0.75f),
+                (if (dark) Color.WHITE else 0xFFD8D4CE.toInt()).withAlpha(if (dark) 0.05f else 0.35f),
                 Shader.TileMode.CLAMP)
         }
         c.drawRoundRect(rect, r, r, stroke)
@@ -156,14 +206,14 @@ object WidgetArt {
         val size = (110 * ctx.resources.displayMetrics.density).roundToInt()
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        val dark = cfg.isDark(ctx) || cfg.bgStyle == 1 && cfg.isDark(ctx)
+        val dark = cfg.isDark(ctx)
         val a = Palette.accents.getOrElse(cfg.accent) { Palette.accents[0] }
         val stroke = size * 0.11f
         val pad = stroke / 2 + 4f
         val rect = RectF(pad, pad, size - pad, size - pad)
         val track = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE; strokeWidth = stroke; strokeCap = Paint.Cap.ROUND
-            color = if (dark) 0x22FFFFFF else 0x18000000
+            color = if (dark) 0x26FFFFFF else 0x1A000000
         }
         c.drawArc(rect, 0f, 360f, false, track)
         val ratio = if (total == 0) 0f else done / total.toFloat()
@@ -198,32 +248,100 @@ object WidgetArt {
         if (checked) {
             p.color = a.strong.argb()
             c.drawCircle(s / 2f, s / 2f, r, p)
-            p.color = Color.WHITE; p.style = Paint.Style.STROKE; p.strokeWidth = s * 0.1f; p.strokeCap = Paint.Cap.ROUND; p.strokeJoin = Paint.Join.ROUND
+            p.color = Color.WHITE; p.style = Paint.Style.STROKE; p.strokeWidth = s * 0.11f; p.strokeCap = Paint.Cap.ROUND; p.strokeJoin = Paint.Join.ROUND
             val path = Path().apply { moveTo(s * 0.28f, s * 0.52f); lineTo(s * 0.44f, s * 0.68f); lineTo(s * 0.74f, s * 0.34f) }
             c.drawPath(path, p)
         } else {
-            p.color = col; p.alpha = 35; c.drawCircle(s / 2f, s / 2f, r, p)
-            p.style = Paint.Style.STROKE; p.strokeWidth = s * 0.085f; p.alpha = if (priority == 0) 120 else 230
-            if (priority == 0) p.color = if (dark) 0xFF8E8E9A.toInt() else 0xFF9A9AA6.toInt()
+            p.color = col; p.alpha = 38; c.drawCircle(s / 2f, s / 2f, r, p)
+            p.style = Paint.Style.STROKE; p.strokeWidth = s * 0.09f; p.alpha = if (priority == 0) 150 else 235
+            if (priority == 0) p.color = if (dark) 0xFFA2A2B0.toInt() else 0xFF787886.toInt()
             c.drawCircle(s / 2f, s / 2f, r - 1f, p)
         }
         return bmp
     }
 
-    fun fabBitmap(ctx: Context, accentIdx: Int, sizeDp: Int = 56, symbol: String = "+"): Bitmap {
+    fun fabBitmap(ctx: Context, accentIdx: Int, sizeDp: Int = 56, symbol: String = "+", opacity: Int = 100): Bitmap {
         val s = (sizeDp * ctx.resources.displayMetrics.density).roundToInt()
         val bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val a = Palette.accents.getOrElse(accentIdx) { Palette.accents[0] }
+        val alpha = (opacity.coerceIn(20, 100)) / 100f
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            shader = LinearGradient(0f, 0f, s.toFloat(), s.toFloat(), a.strong.argb(), a.partner.argb(), Shader.TileMode.CLAMP)
+            shader = LinearGradient(0f, 0f, s.toFloat(), s.toFloat(), a.strong.argb().withAlpha(alpha), a.partner.argb().withAlpha(alpha), Shader.TileMode.CLAMP)
         }
         c.drawCircle(s / 2f, s / 2f, s / 2f - 1f, p)
         val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE; textAlign = Paint.Align.CENTER; textSize = s * 0.52f
+            color = Color.WHITE.withAlpha((alpha + 0.15f).coerceAtMost(1f))
+            textAlign = Paint.Align.CENTER; textSize = s * 0.52f
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
         }
         c.drawText(symbol, s / 2f, s / 2f - (tp.descent() + tp.ascent()) / 2f, tp)
+        return bmp
+    }
+
+    /**
+     * 1x1 Quick Add bitmap with full support for Accent colour, Opacity slider, and a clear
+     * visual icon + label ("Task" vs "Note") so you can tell at a glance what the button creates.
+     */
+    fun quickAddBitmap(ctx: Context, cfg: WidgetCfg, sizeDp: Int = 72): Bitmap {
+        val dm = ctx.resources.displayMetrics
+        val s = (sizeDp * dm.density).roundToInt()
+        val bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp)
+        val a = Palette.accents.getOrElse(cfg.accent) { Palette.accents[0] }
+        val alpha = (cfg.opacity.coerceIn(20, 100)) / 100f
+        val r = (cfg.radius.coerceIn(14, 36) / 36f) * (s / 2f - 2f)
+        val rect = RectF(2f, 2f, s - 2f, s - 2f)
+
+        // Gradient rounded square / circle background
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            shader = LinearGradient(0f, 0f, s.toFloat(), s.toFloat(), a.strong.argb().withAlpha(alpha), a.partner.argb().withAlpha(alpha), Shader.TileMode.CLAMP)
+        }
+        c.drawRoundRect(rect, r, r, bgPaint)
+
+        // Subtle inner highlight border
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 1.3f * dm.density
+            color = Color.WHITE.withAlpha(0.45f * alpha)
+        }
+        c.drawRoundRect(rect, r, r, borderPaint)
+
+        val fgAlpha = (alpha + 0.18f).coerceAtMost(1f)
+        val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE.withAlpha(fgAlpha)
+            style = Paint.Style.STROKE
+            strokeWidth = s * 0.068f
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+
+        if (cfg.quickAction == 1) {
+            // Note icon (page + pencil/lines)
+            val box = RectF(s * 0.30f, s * 0.18f, s * 0.70f, s * 0.56f)
+            c.drawRoundRect(box, s * 0.07f, s * 0.07f, iconPaint)
+            iconPaint.strokeWidth = s * 0.052f
+            c.drawLine(s * 0.39f, s * 0.31f, s * 0.61f, s * 0.31f, iconPaint)
+            c.drawLine(s * 0.39f, s * 0.43f, s * 0.54f, s * 0.43f, iconPaint)
+        } else {
+            // Task icon (+ inside check circle)
+            val cx = s * 0.5f
+            val cy = s * 0.37f
+            val len = s * 0.15f
+            c.drawLine(cx - len, cy, cx + len, cy, iconPaint)
+            c.drawLine(cx, cy - len, cx, cy + len, iconPaint)
+        }
+
+        // Bottom label ("TASK" or "NOTE")
+        val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE.withAlpha(fgAlpha)
+            textAlign = Paint.Align.CENTER
+            textSize = s * 0.175f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            letterSpacing = 0.06f
+        }
+        val label = if (cfg.quickAction == 1) "NOTE" else "TASK"
+        c.drawText(label, s / 2f, s * 0.80f, labelPaint)
         return bmp
     }
 }

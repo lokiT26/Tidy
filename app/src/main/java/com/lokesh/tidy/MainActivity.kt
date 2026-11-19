@@ -42,6 +42,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.lokesh.tidy.data.Category
 import com.lokesh.tidy.data.Note
 import com.lokesh.tidy.data.TaskWithSubtasks
@@ -52,8 +53,11 @@ import com.lokesh.tidy.ui.components.glass
 import com.lokesh.tidy.ui.screens.*
 import com.lokesh.tidy.ui.theme.TidyTheme
 import com.lokesh.tidy.ui.theme.tidy
+import com.lokesh.tidy.widget.WidgetUpdater
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 import java.time.LocalTime
@@ -69,6 +73,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Reminders.ensureChannel(this)
         Reminders.scheduleMidnight(this)
+        lifecycleScope.launch(Dispatchers.IO) { WidgetUpdater.updateAll(this@MainActivity) }
         pendingIntent.value = intent
         setContent {
             val settings by vm.settings.collectAsStateWithLifecycle()
@@ -88,6 +93,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         pendingIntent.value = intent
     }
 
@@ -99,6 +105,21 @@ class MainActivity : ComponentActivity() {
         const val ACTION_OPEN_NOTE = "open_note"
         const val ACTION_CALENDAR = "calendar"
         const val EXTRA_ID = "id"
+
+        fun parseAction(intent: Intent?): Pair<String?, Long> {
+            if (intent == null) return null to -1L
+            val extraAction = intent.getStringExtra(EXTRA_ACTION)
+            val extraId = intent.getLongExtra(EXTRA_ID, -1L)
+            if (extraAction != null) return extraAction to extraId
+            val uri = intent.data
+            if (uri != null && uri.scheme == "tidy" && uri.host == "widget") {
+                val segs = uri.pathSegments
+                val act = segs.getOrNull(0)
+                val id = segs.getOrNull(1)?.toLongOrNull() ?: -1L
+                return act to id
+            }
+            return null to -1L
+        }
     }
 }
 
@@ -115,11 +136,29 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
     val snackbar = remember { SnackbarHostState() }
     var snackbarJob by remember { mutableStateOf<Job?>(null) }
 
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    var overlay by remember { mutableStateOf(Overlay.None) }
-    var editingNote by remember { mutableStateOf<Note?>(null) }
+    val initialAction = remember { MainActivity.parseAction(pendingIntent.value).first }
+    var tab by rememberSaveable {
+        mutableIntStateOf(
+            when (initialAction) {
+                MainActivity.ACTION_CALENDAR -> 1
+                MainActivity.ACTION_NEW_NOTE, MainActivity.ACTION_OPEN_NOTE -> 2
+                else -> 0
+            }
+        )
+    }
+    var overlay by remember {
+        mutableStateOf(
+            if (initialAction == MainActivity.ACTION_NEW_NOTE) Overlay.Note else Overlay.None
+        )
+    }
+    var editingNote by remember {
+        mutableStateOf<Note?>(
+            if (initialAction == MainActivity.ACTION_NEW_NOTE) Note() else null
+        )
+    }
     var editingTask by remember { mutableStateOf<TaskWithSubtasks?>(null) }
-    var newTask by remember { mutableStateOf(false) }
+    var newTask by remember { mutableStateOf(initialAction == MainActivity.ACTION_NEW_TASK) }
+    var awaitingDeepLinkNote by remember { mutableStateOf(initialAction == MainActivity.ACTION_OPEN_NOTE) }
     var calendarDay by remember { mutableStateOf(LocalDate.now()) }
     var calendarResetTrigger by remember { mutableIntStateOf(0) }
     var selectedCategory by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -129,22 +168,80 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
     val notifPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) { if (Build.VERSION.SDK_INT >= 33) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS) }
 
-    // Handle widget / notification intents
-    LaunchedEffect(pendingIntent.value, tasks.isNotEmpty(), notes.size) {
-        val i = pendingIntent.value ?: return@LaunchedEffect
-        when (i.getStringExtra(MainActivity.EXTRA_ACTION)) {
-            MainActivity.ACTION_NEW_TASK -> { newTask = true; pendingIntent.value = null }
-            MainActivity.ACTION_NEW_NOTE -> { editingNote = Note(); overlay = Overlay.Note; pendingIntent.value = null }
-            MainActivity.ACTION_CALENDAR -> { tab = 1; calendarDay = LocalDate.now(); overlay = Overlay.None; pendingIntent.value = null }
-            MainActivity.ACTION_OPEN_TASK -> {
-                val id = i.getLongExtra(MainActivity.EXTRA_ID, -1)
-                tasks.find { it.task.id == id }?.let { editingTask = it; pendingIntent.value = null }
+    // Synchronously switch tab on new intent before composition so Today screen never flashes
+    val curIntent = pendingIntent.value
+    val (curAction, curTargetId) = remember(curIntent) { MainActivity.parseAction(curIntent) }
+    if (curAction != null) {
+        when (curAction) {
+            MainActivity.ACTION_CALENDAR -> {
+                if (tab != 1) tab = 1
+                if (overlay != Overlay.None) overlay = Overlay.None
+            }
+            MainActivity.ACTION_NEW_NOTE -> {
+                if (tab != 2) tab = 2
+                if (editingNote == null || editingNote?.id != 0L) editingNote = Note()
+                if (overlay != Overlay.Note) overlay = Overlay.Note
             }
             MainActivity.ACTION_OPEN_NOTE -> {
-                val id = i.getLongExtra(MainActivity.EXTRA_ID, -1)
-                notes.find { it.id == id }?.let { editingNote = it; overlay = Overlay.Note; pendingIntent.value = null }
+                if (tab != 2) tab = 2
+                val found = notes.find { it.id == curTargetId }
+                if (found != null) {
+                    editingNote = found
+                    overlay = Overlay.Note
+                    awaitingDeepLinkNote = false
+                } else {
+                    awaitingDeepLinkNote = true
+                }
             }
-            else -> pendingIntent.value = null
+            MainActivity.ACTION_NEW_TASK -> {
+                if (overlay != Overlay.None) overlay = Overlay.None
+                if (!newTask) newTask = true
+            }
+        }
+    }
+
+    // Consume pendingIntent and perform direct DB lookup for deep-linked task/note if not yet in Flow
+    LaunchedEffect(curIntent) {
+        val i = curIntent ?: return@LaunchedEffect
+        val (act, id) = MainActivity.parseAction(i)
+        when (act) {
+            MainActivity.ACTION_NEW_TASK -> {
+                overlay = Overlay.None
+                newTask = true
+                pendingIntent.value = null
+            }
+            MainActivity.ACTION_NEW_NOTE -> {
+                tab = 2
+                editingNote = Note()
+                overlay = Overlay.Note
+                pendingIntent.value = null
+            }
+            MainActivity.ACTION_CALENDAR -> {
+                tab = 1
+                calendarDay = LocalDate.now()
+                overlay = Overlay.None
+                pendingIntent.value = null
+            }
+            MainActivity.ACTION_OPEN_TASK -> {
+                overlay = Overlay.None
+                val task = tasks.find { it.task.id == id } ?: withContext(Dispatchers.IO) { vm.repo.dao.task(id) }
+                if (task != null) editingTask = task
+                pendingIntent.value = null
+            }
+            MainActivity.ACTION_OPEN_NOTE -> {
+                tab = 2
+                val note = notes.find { it.id == id } ?: withContext(Dispatchers.IO) { vm.repo.dao.note(id) }
+                if (note != null) {
+                    editingNote = note
+                    overlay = Overlay.Note
+                }
+                awaitingDeepLinkNote = false
+                pendingIntent.value = null
+            }
+            else -> {
+                awaitingDeepLinkNote = false
+                pendingIntent.value = null
+            }
         }
     }
 
@@ -182,36 +279,38 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
     }
 
     AmbientBackground {
-        AnimatedContent(
-            targetState = tab,
-            transitionSpec = { (fadeIn(tween(220)) + scaleIn(initialScale = 0.98f, animationSpec = tween(220))) togetherWith fadeOut(tween(120)) },
-            label = "tabs"
-        ) { current ->
-            when (current) {
-                0 -> TodayScreen(
-                    name = s.name, tasks = tasks, categories = categories, confettiEnabled = s.confetti,
-                    onToggle = ::toggle, onOpen = { editingTask = it }, onDelete = ::deleteWithUndo, onSubtask = { vm.toggleSubtask(it) },
-                    onReorder = { vm.reorder(it) }, onSearch = { overlay = Overlay.Search }, onSettings = { overlay = Overlay.Settings },
-                    selectedCategory = selectedCategory, onSelectCategory = { selectedCategory = it },
-                    onAddCategory = { editCategory = null; showCategoryDialog = true },
-                )
-                1 -> CalendarScreen(
-                    tasks = tasks, categories = categories, selected = calendarDay,
-                    resetToTodayTrigger = calendarResetTrigger,
-                    onSelect = { calendarDay = it },
-                    onToggle = ::toggle, onOpen = { editingTask = it }, onDelete = ::deleteWithUndo,
-                    onSubtask = { vm.toggleSubtask(it) }, onReorder = { vm.reorder(it) }
-                )
-                2 -> NotesScreen(
-                    notes = notes,
-                    onOpen = { editingNote = it; overlay = Overlay.Note },
-                    onTogglePin = {
-                        if (s.haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        vm.saveNote(it.copy(pinned = !it.pinned))
-                    },
-                    onReorder = { vm.reorderNotes(it) }
-                )
-                else -> StatsScreen(tasks, categories)
+        if (!awaitingDeepLinkNote) {
+            AnimatedContent(
+                targetState = tab,
+                transitionSpec = { (fadeIn(tween(180)) + scaleIn(initialScale = 0.98f, animationSpec = tween(180))) togetherWith fadeOut(tween(100)) },
+                label = "tabs"
+            ) { current ->
+                when (current) {
+                    0 -> TodayScreen(
+                        name = s.name, tasks = tasks, categories = categories, confettiEnabled = s.confetti,
+                        onToggle = ::toggle, onOpen = { editingTask = it }, onDelete = ::deleteWithUndo, onSubtask = { vm.toggleSubtask(it) },
+                        onReorder = { vm.reorder(it) }, onSearch = { overlay = Overlay.Search }, onSettings = { overlay = Overlay.Settings },
+                        selectedCategory = selectedCategory, onSelectCategory = { selectedCategory = it },
+                        onAddCategory = { editCategory = null; showCategoryDialog = true },
+                    )
+                    1 -> CalendarScreen(
+                        tasks = tasks, categories = categories, selected = calendarDay,
+                        resetToTodayTrigger = calendarResetTrigger,
+                        onSelect = { calendarDay = it },
+                        onToggle = ::toggle, onOpen = { editingTask = it }, onDelete = ::deleteWithUndo,
+                        onSubtask = { vm.toggleSubtask(it) }, onReorder = { vm.reorder(it) }
+                    )
+                    2 -> NotesScreen(
+                        notes = notes,
+                        onOpen = { editingNote = it; overlay = Overlay.Note },
+                        onTogglePin = {
+                            if (s.haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            vm.saveNote(it.copy(pinned = !it.pinned))
+                        },
+                        onReorder = { vm.reorderNotes(it) }
+                    )
+                    else -> StatsScreen(tasks, categories)
+                }
             }
         }
 
