@@ -89,11 +89,10 @@ fun SearchScreen(
         if (nr.isNotEmpty()) {
             item { SectionHeader("Notes", nr.size) }
             items(nr, key = { "n" + it.id }) { n ->
-                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Palette.noteColor(n.colorIndex, t.dark)).clickable { onOpenNote(n) }.padding(16.dp)) {
-                    val fg = if (t.dark) t.text else Color(0xFF1C1B22)
-                    if (n.title.isNotBlank()) Text(n.title, style = MaterialTheme.typography.titleMedium, color = fg)
-                    if (n.content.isNotBlank()) Text(n.content.replace("[x] ", "✓ ").replace("[ ] ", "○ "), style = MaterialTheme.typography.bodyMedium, color = fg.copy(alpha = 0.7f), maxLines = 3, overflow = TextOverflow.Ellipsis)
-                }
+                NoteCard(
+                    n = n,
+                    onClick = { onOpenNote(n) }
+                )
             }
         }
     }

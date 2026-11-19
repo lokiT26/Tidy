@@ -64,6 +64,14 @@ import java.time.LocalTime
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+data class DeepLinkInfo(
+    val action: String? = null,
+    val id: Long = -1L,
+    val prefillDate: Long? = null,
+    val prefillCategory: Long? = null,
+    val prefillSomeday: Boolean = false,
+)
+
 class MainActivity : ComponentActivity() {
     private val vm: AppViewModel by viewModels()
     private val pendingIntent = mutableStateOf<Intent?>(null)
@@ -105,20 +113,38 @@ class MainActivity : ComponentActivity() {
         const val ACTION_OPEN_NOTE = "open_note"
         const val ACTION_CALENDAR = "calendar"
         const val EXTRA_ID = "id"
+        const val EXTRA_DATE = "prefill_date"
+        const val EXTRA_CATEGORY_ID = "prefill_cat_id"
+        const val EXTRA_SOMEDAY = "prefill_someday"
 
-        fun parseAction(intent: Intent?): Pair<String?, Long> {
-            if (intent == null) return null to -1L
+        fun parseDeepLink(intent: Intent?): DeepLinkInfo {
+            if (intent == null) return DeepLinkInfo()
+            val uri = intent.data
             val extraAction = intent.getStringExtra(EXTRA_ACTION)
             val extraId = intent.getLongExtra(EXTRA_ID, -1L)
-            if (extraAction != null) return extraAction to extraId
-            val uri = intent.data
-            if (uri != null && uri.scheme == "tidy" && uri.host == "widget") {
-                val segs = uri.pathSegments
-                val act = segs.getOrNull(0)
-                val id = segs.getOrNull(1)?.toLongOrNull() ?: -1L
-                return act to id
-            }
-            return null to -1L
+            val hasDateExtra = intent.hasExtra(EXTRA_DATE)
+            val hasCatExtra = intent.hasExtra(EXTRA_CATEGORY_ID)
+            val dateFromExtra = if (hasDateExtra) intent.getLongExtra(EXTRA_DATE, 0L) else null
+            val catFromExtra = if (hasCatExtra) intent.getLongExtra(EXTRA_CATEGORY_ID, -1L).takeIf { it >= 0L } else null
+            val somedayFromExtra = intent.getBooleanExtra(EXTRA_SOMEDAY, false)
+
+            val uriAct = if (uri != null && uri.scheme == "tidy" && uri.host == "widget") {
+                uri.pathSegments.getOrNull(0)?.takeIf { it != "home" }
+            } else null
+            val uriId = if (uri != null && uri.scheme == "tidy" && uri.host == "widget") {
+                uri.pathSegments.getOrNull(1)?.toLongOrNull() ?: -1L
+            } else -1L
+            val dateFromUri = uri?.getQueryParameter("date")?.toLongOrNull()
+            val catFromUri = uri?.getQueryParameter("cat")?.toLongOrNull()
+            val somedayFromUri = uri?.getQueryParameter("someday") == "1"
+
+            return DeepLinkInfo(
+                action = extraAction ?: uriAct,
+                id = if (extraId != -1L) extraId else uriId,
+                prefillDate = dateFromExtra ?: dateFromUri,
+                prefillCategory = catFromExtra ?: catFromUri,
+                prefillSomeday = somedayFromExtra || somedayFromUri,
+            )
         }
     }
 }
@@ -136,10 +162,10 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
     val snackbar = remember { SnackbarHostState() }
     var snackbarJob by remember { mutableStateOf<Job?>(null) }
 
-    val initialAction = remember { MainActivity.parseAction(pendingIntent.value).first }
+    val initLink = remember { MainActivity.parseDeepLink(pendingIntent.value) }
     var tab by rememberSaveable {
         mutableIntStateOf(
-            when (initialAction) {
+            when (initLink.action) {
                 MainActivity.ACTION_CALENDAR -> 1
                 MainActivity.ACTION_NEW_NOTE, MainActivity.ACTION_OPEN_NOTE -> 2
                 else -> 0
@@ -148,20 +174,28 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
     }
     var overlay by remember {
         mutableStateOf(
-            if (initialAction == MainActivity.ACTION_NEW_NOTE) Overlay.Note else Overlay.None
+            if (initLink.action == MainActivity.ACTION_NEW_NOTE) Overlay.Note else Overlay.None
         )
     }
     var editingNote by remember {
         mutableStateOf<Note?>(
-            if (initialAction == MainActivity.ACTION_NEW_NOTE) Note() else null
+            if (initLink.action == MainActivity.ACTION_NEW_NOTE) Note() else null
         )
     }
     var editingTask by remember { mutableStateOf<TaskWithSubtasks?>(null) }
-    var newTask by remember { mutableStateOf(initialAction == MainActivity.ACTION_NEW_TASK) }
-    var awaitingDeepLinkNote by remember { mutableStateOf(initialAction == MainActivity.ACTION_OPEN_NOTE) }
-    var calendarDay by remember { mutableStateOf(LocalDate.now()) }
+    var newTask by remember { mutableStateOf(initLink.action == MainActivity.ACTION_NEW_TASK) }
+    var newTaskPrefillDate by remember { mutableStateOf<Long?>(initLink.prefillDate) }
+    var newTaskPrefillCat by remember { mutableStateOf<Long?>(initLink.prefillCategory) }
+    var newTaskPrefillSomeday by remember { mutableStateOf(initLink.prefillSomeday) }
+    var awaitingDeepLinkNote by remember { mutableStateOf(initLink.action == MainActivity.ACTION_OPEN_NOTE) }
+    var calendarDay by remember {
+        mutableStateOf(
+            initLink.prefillDate?.let { LocalDate.ofEpochDay(it) } ?: LocalDate.now()
+        )
+    }
     var calendarResetTrigger by remember { mutableIntStateOf(0) }
-    var selectedCategory by rememberSaveable { mutableStateOf<Long?>(null) }
+    var selectedCategory by rememberSaveable { mutableStateOf<Long?>(initLink.prefillCategory) }
+    var activeNoteColorFilter by remember { mutableStateOf<Int?>(null) }
     var editCategory by remember { mutableStateOf<Category?>(null) }
     var showCategoryDialog by remember { mutableStateOf(false) }
 
@@ -170,11 +204,12 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
 
     // Synchronously switch tab on new intent before composition so Today screen never flashes
     val curIntent = pendingIntent.value
-    val (curAction, curTargetId) = remember(curIntent) { MainActivity.parseAction(curIntent) }
-    if (curAction != null) {
-        when (curAction) {
+    val curLink = remember(curIntent) { MainActivity.parseDeepLink(curIntent) }
+    if (curIntent != null) {
+        when (curLink.action) {
             MainActivity.ACTION_CALENDAR -> {
                 if (tab != 1) tab = 1
+                if (curLink.prefillDate != null) calendarDay = LocalDate.ofEpochDay(curLink.prefillDate)
                 if (overlay != Overlay.None) overlay = Overlay.None
             }
             MainActivity.ACTION_NEW_NOTE -> {
@@ -184,7 +219,7 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
             }
             MainActivity.ACTION_OPEN_NOTE -> {
                 if (tab != 2) tab = 2
-                val found = notes.find { it.id == curTargetId }
+                val found = notes.find { it.id == curLink.id }
                 if (found != null) {
                     editingNote = found
                     overlay = Overlay.Note
@@ -195,7 +230,18 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
             }
             MainActivity.ACTION_NEW_TASK -> {
                 if (overlay != Overlay.None) overlay = Overlay.None
+                newTaskPrefillDate = curLink.prefillDate
+                newTaskPrefillCat = curLink.prefillCategory
+                newTaskPrefillSomeday = curLink.prefillSomeday
+                if (curLink.prefillCategory != null) selectedCategory = curLink.prefillCategory
                 if (!newTask) newTask = true
+            }
+            null -> {
+                if (curLink.prefillCategory != null) {
+                    tab = 0
+                    overlay = Overlay.None
+                    selectedCategory = curLink.prefillCategory
+                }
             }
         }
     }
@@ -203,10 +249,14 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
     // Consume pendingIntent and perform direct DB lookup for deep-linked task/note if not yet in Flow
     LaunchedEffect(curIntent) {
         val i = curIntent ?: return@LaunchedEffect
-        val (act, id) = MainActivity.parseAction(i)
-        when (act) {
+        val link = MainActivity.parseDeepLink(i)
+        when (link.action) {
             MainActivity.ACTION_NEW_TASK -> {
                 overlay = Overlay.None
+                newTaskPrefillDate = link.prefillDate
+                newTaskPrefillCat = link.prefillCategory
+                newTaskPrefillSomeday = link.prefillSomeday
+                if (link.prefillCategory != null) selectedCategory = link.prefillCategory
                 newTask = true
                 pendingIntent.value = null
             }
@@ -218,19 +268,19 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
             }
             MainActivity.ACTION_CALENDAR -> {
                 tab = 1
-                calendarDay = LocalDate.now()
+                calendarDay = link.prefillDate?.let { LocalDate.ofEpochDay(it) } ?: LocalDate.now()
                 overlay = Overlay.None
                 pendingIntent.value = null
             }
             MainActivity.ACTION_OPEN_TASK -> {
                 overlay = Overlay.None
-                val task = tasks.find { it.task.id == id } ?: withContext(Dispatchers.IO) { vm.repo.dao.task(id) }
+                val task = tasks.find { it.task.id == link.id } ?: withContext(Dispatchers.IO) { vm.repo.dao.task(link.id) }
                 if (task != null) editingTask = task
                 pendingIntent.value = null
             }
             MainActivity.ACTION_OPEN_NOTE -> {
                 tab = 2
-                val note = notes.find { it.id == id } ?: withContext(Dispatchers.IO) { vm.repo.dao.note(id) }
+                val note = notes.find { it.id == link.id } ?: withContext(Dispatchers.IO) { vm.repo.dao.note(link.id) }
                 if (note != null) {
                     editingNote = note
                     overlay = Overlay.Note
@@ -239,6 +289,11 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
                 pendingIntent.value = null
             }
             else -> {
+                if (link.prefillCategory != null) {
+                    tab = 0
+                    overlay = Overlay.None
+                    selectedCategory = link.prefillCategory
+                }
                 awaitingDeepLinkNote = false
                 pendingIntent.value = null
             }
@@ -278,6 +333,8 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
         }
     }
 
+    val pinnedNoteSize = if (s.separatePinnedNoteSize) s.pinnedNoteSizeMode else s.noteSizeMode
+
     AmbientBackground {
         if (!awaitingDeepLinkNote) {
             AnimatedContent(
@@ -302,6 +359,11 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
                     )
                     2 -> NotesScreen(
                         notes = notes,
+                        pinnedSizeMode = pinnedNoteSize,
+                        othersSizeMode = s.noteSizeMode,
+                        sortOrder = s.notesSortOrder,
+                        onSortOrderChange = { vm.setNotesSortOrder(it) },
+                        onActiveColorFilterChange = { activeNoteColorFilter = it },
                         onOpen = { editingNote = it; overlay = Overlay.Note },
                         onTogglePin = {
                             if (s.haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -344,7 +406,16 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
                     .background(Brush.linearGradient(listOf(t.accentStrong, t.accent.partner)))
                     .clickable {
                         if (s.haptics) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        if (tab == 2) { editingNote = Note(); overlay = Overlay.Note } else newTask = true
+                        if (tab == 2) {
+                            // Pre-select the active filtered colour on Notes screen if one is active (#8)
+                            editingNote = Note(colorIndex = activeNoteColorFilter ?: 0)
+                            overlay = Overlay.Note
+                        } else {
+                            newTaskPrefillDate = null
+                            newTaskPrefillCat = null
+                            newTaskPrefillSomeday = false
+                            newTask = true
+                        }
                     },
                 contentAlignment = Alignment.Center
             ) {
@@ -408,15 +479,29 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
     }
 
     if (newTask || editingTask != null) {
+        val resolvedDefaultDate = when {
+            newTaskPrefillSomeday -> null
+            newTaskPrefillDate != null -> newTaskPrefillDate
+            tab == 1 -> calendarDay.toEpochDay()
+            else -> LocalDate.now().toEpochDay()
+        }
+        val resolvedDefaultCat = newTaskPrefillCat ?: selectedCategory ?: s.lastCategoryId
+        fun clearNewTaskState() {
+            newTask = false
+            editingTask = null
+            newTaskPrefillDate = null
+            newTaskPrefillCat = null
+            newTaskPrefillSomeday = false
+        }
         TaskEditorSheet(
             initial = editingTask,
             categories = categories,
-            defaultDate = if (tab == 1) calendarDay.toEpochDay() else LocalDate.now().toEpochDay(),
-            defaultCategory = selectedCategory ?: s.lastCategoryId,
+            defaultDate = resolvedDefaultDate,
+            defaultCategory = resolvedDefaultCat,
             defaultPriority = s.lastPriority,
-            onSave = { task, subs -> vm.saveTask(task, subs); newTask = false; editingTask = null },
-            onDelete = { _ -> editingTask?.let { deleteWithUndo(it) }; editingTask = null; newTask = false },
-            onDismiss = { newTask = false; editingTask = null },
+            onSave = { task, subs -> vm.saveTask(task, subs); clearNewTaskState() },
+            onDelete = { _ -> editingTask?.let { deleteWithUndo(it) }; clearNewTaskState() },
+            onDismiss = { clearNewTaskState() },
         )
     }
     if (showCategoryDialog) {

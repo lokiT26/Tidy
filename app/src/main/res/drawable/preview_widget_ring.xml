@@ -1,0 +1,32 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="220dp" android:height="92dp"
+    android:viewportWidth="220" android:viewportHeight="92">
+    <!-- 2x1 Horizontal Card -->
+    <path android:pathData="M24,4h172a20,20 0 0,1 20,20v44a20,20 0 0,1 -20,20h-172a20,20 0 0,1 -20,-20v-44a20,20 0 0,1 20,-20z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:startX="4" android:startY="4" android:endX="216" android:endY="88" android:type="linear">
+                <item android:offset="0" android:color="#FFEDE8FF"/>
+                <item android:offset="1" android:color="#FFFFEEE4"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Progress Ring Track -->
+    <path android:strokeColor="#337C6CF2" android:strokeWidth="6"
+        android:pathData="M48,46m-22,0a22,22 0 1,0 44,0a22,22 0 1,0 -44,0"/>
+    <!-- Progress Ring Arc -->
+    <path android:strokeColor="#FF7C6CF2" android:strokeWidth="6" android:strokeLineCap="round"
+        android:pathData="M48,24 A22,22 0 1,1 28,56"/>
+    <!-- Center Dot / Label -->
+    <path android:fillColor="#FF17171C"
+        android:pathData="M40,43h16a3,3 0 0,1 0,6h-16a3,3 0 0,1 0,-6z"/>
+    <!-- Right Column Info -->
+    <path android:fillColor="#FF7C6CF2"
+        android:pathData="M88,26h42a3,3 0 0,1 0,6h-42a3,3 0 0,1 0,-6z"/>
+    <path android:fillColor="#FFF07B4F"
+        android:pathData="M158,24h36a5,5 0 0,1 0,10h-36a5,5 0 0,1 0,-10z"/>
+    <path android:fillColor="#FF17171C"
+        android:pathData="M88,43h86a4,4 0 0,1 0,8h-86a4,4 0 0,1 0,-8z"/>
+    <path android:fillColor="#FF6E6E7A"
+        android:pathData="M88,59h60a3,3 0 0,1 0,6h-60a3,3 0 0,1 0,-6z"/>
+</vector>

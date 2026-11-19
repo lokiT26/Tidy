@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -131,6 +132,29 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
             }
             Toggle(Icons.Rounded.Brightness2, "Pure black (AMOLED)", "Deeper blacks in dark mode", s.amoled) { vm.setAmoled(it) }
             Toggle(Icons.Rounded.Celebration, "Confetti", "Celebrate when you finish the day", s.confetti) { vm.setConfetti(it) }
+
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(
+                    if (s.separatePinnedNoteSize) "Note box height · Others" else "Note box height",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = t.textMuted
+                )
+                Spacer(Modifier.height(8.dp))
+                NoteHeightSelector(selected = s.noteSizeMode, onSelect = { vm.setNoteSizeMode(it) })
+                AnimatedVisibility(visible = s.separatePinnedNoteSize) {
+                    Column(Modifier.padding(top = 12.dp)) {
+                        Text("Note box height · Pinned", style = MaterialTheme.typography.labelMedium, color = t.textMuted)
+                        Spacer(Modifier.height(8.dp))
+                        NoteHeightSelector(selected = s.pinnedNoteSizeMode, onSelect = { vm.setPinnedNoteSizeMode(it) })
+                    }
+                }
+            }
+            Toggle(
+                icon = Icons.Rounded.PushPin,
+                title = "Different height for Pinned",
+                subtitle = "Set a separate box size for pinned notes",
+                value = s.separatePinnedNoteSize
+            ) { vm.setSeparatePinnedNoteSize(it) }
         }
 
         Group("Lists") {
@@ -166,6 +190,28 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
 
         val pkgVersion = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "1.2" }
         Text("Tidy $pkgVersion · made for Lokesh · 100% offline", style = MaterialTheme.typography.labelSmall, color = t.textFaint, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    }
+}
+
+@Composable
+private fun NoteHeightSelector(selected: Int, onSelect: (Int) -> Unit) {
+    val t = tidy
+    val options = listOf("Auto", "Small", "Medium", "Large")
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(t.cardAlt).padding(4.dp)) {
+        options.forEachIndexed { idx, label ->
+            val sel = selected == idx
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (sel) t.card else Color.Transparent)
+                    .clickable { onSelect(idx) }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, color = if (sel) t.accentStrong else t.textMuted)
+            }
+        }
     }
 }
 

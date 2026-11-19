@@ -5,6 +5,7 @@
     android:resizeMode="horizontal|vertical"
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/widget_loading"
+    android:previewImage="@drawable/preview_widget_sticky"
     android:description="@string/w_sticky_desc"
     android:configure="com.lokesh.tidy.widget.WidgetConfigActivity"
     android:widgetFeatures="reconfigurable"

@@ -41,6 +41,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setAccent(v: Int) = viewModelScope.launch { repo.settings.setAccent(v) }
     fun setConfetti(v: Boolean) = viewModelScope.launch { repo.settings.setConfetti(v) }
     fun setHaptics(v: Boolean) = viewModelScope.launch { repo.settings.setHaptics(v) }
+    fun setNoteSizeMode(v: Int) = viewModelScope.launch { repo.settings.setNoteSizeMode(v) }
+    fun setSeparatePinnedNoteSize(v: Boolean) = viewModelScope.launch { repo.settings.setSeparatePinnedNoteSize(v) }
+    fun setPinnedNoteSizeMode(v: Int) = viewModelScope.launch { repo.settings.setPinnedNoteSizeMode(v) }
+    fun setNotesSortOrder(v: Int) = viewModelScope.launch { repo.settings.setNotesSortOrder(v) }
 }
 
 object Dates {

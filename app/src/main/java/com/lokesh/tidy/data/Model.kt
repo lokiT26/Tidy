@@ -62,6 +62,7 @@ data class Note(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val sortOrder: Int = 0,
+    val hidden: Boolean = false,
 )
 
 data class TaskWithSubtasks(
@@ -126,7 +127,7 @@ interface TidyDao {
     @Insert suspend fun insertCategoriesRaw(c: List<Category>)
 }
 
-@Database(entities = [Category::class, Task::class, Subtask::class, Note::class], version = 2, exportSchema = false)
+@Database(entities = [Category::class, Task::class, Subtask::class, Note::class], version = 3, exportSchema = false)
 abstract class TidyDatabase : RoomDatabase() {
     abstract fun dao(): TidyDao
 
@@ -135,6 +136,11 @@ abstract class TidyDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE tasks ADD COLUMN spawnedTaskId INTEGER DEFAULT NULL")
                 db.execSQL("ALTER TABLE notes ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

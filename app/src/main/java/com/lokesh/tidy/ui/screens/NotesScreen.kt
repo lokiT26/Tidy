@@ -1,5 +1,6 @@
 package com.lokesh.tidy.ui.screens
 
+import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateDpAsState
@@ -26,9 +27,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Canvas
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.draw
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.ImeAction
@@ -36,6 +45,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.lokesh.tidy.data.Note
 import com.lokesh.tidy.ui.components.*
 import com.lokesh.tidy.ui.theme.Palette
@@ -46,6 +56,9 @@ import sh.calvin.reorderable.rememberScroller
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 data class CheckItem(val done: Boolean, val text: String)
 
@@ -78,10 +91,104 @@ fun serializeChecklist(items: List<CheckItem>) = items.joinToString("\n") {
     (if (it.done) "[x] " else "[ ] ") + it.text.replace("\u200B", "")
 }
 
+/**
+ * Fast 3-pass separable box blur (converges to Gaussian blur) on a small downscaled ARGB_8888 bitmap.
+ * Works on all Android versions (including Android 11 / API 30 where RenderEffect is unavailable).
+ */
+private fun gaussianBoxBlur(bmp: Bitmap, radius: Int = 3) {
+    val w = bmp.width
+    val h = bmp.height
+    if (w < 3 || h < 3) return
+    val pixels = IntArray(w * h)
+    val temp = IntArray(w * h)
+    bmp.getPixels(pixels, 0, w, 0, 0, w, h)
+    val div = 2 * radius + 1
+
+    repeat(3) {
+        // Horizontal pass
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) {
+                var r = 0; var g = 0; var b = 0; var a = 0
+                for (k in -radius..radius) {
+                    val px = pixels[row + (x + k).coerceIn(0, w - 1)]
+                    a += (px ushr 24) and 0xFF
+                    r += (px ushr 16) and 0xFF
+                    g += (px ushr 8) and 0xFF
+                    b += px and 0xFF
+                }
+                temp[row + x] = ((a / div) shl 24) or ((r / div) shl 16) or ((g / div) shl 8) or (b / div)
+            }
+        }
+        // Vertical pass
+        for (x in 0 until w) {
+            for (y in 0 until h) {
+                var r = 0; var g = 0; var b = 0; var a = 0
+                for (k in -radius..radius) {
+                    val py = (y + k).coerceIn(0, h - 1)
+                    val px = temp[py * w + x]
+                    a += (px ushr 24) and 0xFF
+                    r += (px ushr 16) and 0xFF
+                    g += (px ushr 8) and 0xFF
+                    b += px and 0xFF
+                }
+                pixels[y * w + x] = ((a / div) shl 24) or ((r / div) shl 16) or ((g / div) shl 8) or (b / div)
+            }
+        }
+    }
+    bmp.setPixels(pixels, 0, w, 0, 0, w, h)
+}
+
+/**
+ * Renders the exact laid-out note content into a downscaled offscreen bitmap and applies a real
+ * 3-pass Gaussian blur + frosted pastel wash so the box size never changes by even 1 pixel.
+ */
+fun Modifier.realNoteBlur(enabled: Boolean, cardBg: Color, fg: Color, isDark: Boolean): Modifier {
+    if (!enabled) return this
+    return this.drawWithContent {
+        val w = size.width.roundToInt()
+        val h = size.height.roundToInt()
+        if (w <= 4 || h <= 4) return@drawWithContent
+
+        val scale = 6
+        val bw = max(6, w / scale)
+        val bh = max(6, h / scale)
+        val bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+        val nativeCanvas = android.graphics.Canvas(bmp)
+        nativeCanvas.drawColor(cardBg.toArgb())
+
+        val composeCanvas = Canvas(nativeCanvas)
+        composeCanvas.save()
+        composeCanvas.scale(bw / size.width, bh / size.height)
+        draw(this, layoutDirection, composeCanvas, size) {
+            this@drawWithContent.drawContent()
+        }
+        composeCanvas.restore()
+
+        gaussianBoxBlur(bmp, radius = 3)
+
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG)
+        val dst = android.graphics.RectF(0f, 0f, size.width, size.height)
+        drawContext.canvas.nativeCanvas.drawBitmap(bmp, null, dst, paint)
+        bmp.recycle()
+
+        // Frosted pastel veil so the note's colour remains distinct while text is completely unreadable
+        drawRoundRect(
+            color = cardBg.copy(alpha = if (isDark) 0.34f else 0.30f),
+            cornerRadius = CornerRadius(14.dp.toPx())
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NotesScreen(
     notes: List<Note>,
+    pinnedSizeMode: Int = 0,
+    othersSizeMode: Int = 0,
+    sortOrder: Int = 0,
+    onSortOrderChange: (Int) -> Unit = {},
+    onActiveColorFilterChange: (Int?) -> Unit = {},
     onOpen: (Note) -> Unit,
     onTogglePin: (Note) -> Unit,
     onReorder: (List<Note>) -> Unit,
@@ -89,11 +196,44 @@ fun NotesScreen(
     val t = tidy
     val haptic = LocalHapticFeedback.current
     var query by rememberSaveable { mutableStateOf("") }
-    val filtered = remember(notes, query) {
+    /** null = All colours, 0..7 = specific Palette.pastels colour */
+    var colorFilter by rememberSaveable { mutableStateOf<Int?>(null) }
+    /** 0 = All types, 1 = Text, 2 = Checklist, 3 = Hidden, 4 = Visible only */
+    var typeFilter by rememberSaveable { mutableIntStateOf(0) }
+    var showFilterBar by rememberSaveable { mutableStateOf(false) }
+    var showSortBar by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(colorFilter) {
+        onActiveColorFilterChange(colorFilter)
+    }
+
+    val queryFiltered = remember(notes, query) {
         if (query.isBlank()) notes else notes.filter { it.title.contains(query, true) || it.content.contains(query, true) }
     }
-    val computedPinned = remember(filtered) { filtered.filter { it.pinned } }
-    val computedOthers = remember(filtered) { filtered.filter { !it.pinned } }
+    // Pinned notes are untouched by the Others filter/sort (staying fixed at top in manual order)
+    val computedPinned = remember(queryFiltered) { queryFiltered.filter { it.pinned } }
+
+    // Others notes apply the colour filter, type filter, and sort order
+    val computedOthers = remember(queryFiltered, colorFilter, typeFilter, sortOrder) {
+        val base = queryFiltered.filter { !it.pinned }
+            .filter { n -> colorFilter == null || n.colorIndex == colorFilter }
+            .filter { n ->
+                when (typeFilter) {
+                    1 -> !n.isChecklist
+                    2 -> n.isChecklist
+                    3 -> n.hidden
+                    4 -> !n.hidden
+                    else -> true
+                }
+            }
+        when (sortOrder) {
+            1 -> base.sortedByDescending { it.updatedAt }
+            2 -> base.sortedByDescending { it.createdAt }
+            3 -> base.sortedBy { it.updatedAt }
+            4 -> base.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title.ifBlank { it.content } })
+            else -> base // Custom drag order (sortOrder ASC, updatedAt DESC from Room)
+        }
+    }
 
     var pinned by remember { mutableStateOf(computedPinned) }
     var others by remember { mutableStateOf(computedOthers) }
@@ -105,6 +245,9 @@ fun NotesScreen(
             others = computedOthers
         }
     }
+
+    val hasActiveFilter = colorFilter != null || typeFilter != 0
+    val canDragOthers = sortOrder == 0 && !hasActiveFilter && query.isBlank()
 
     val gridState = rememberLazyStaggeredGridState()
     val boundedScrollState = remember(gridState) {
@@ -144,7 +287,7 @@ fun NotesScreen(
                 pinned = pinned.toMutableList().apply { add(ti, removeAt(fi)) }
                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             }
-        } else if (fk.startsWith("o_") && tk.startsWith("o_")) {
+        } else if (fk.startsWith("o_") && tk.startsWith("o_") && canDragOthers) {
             val fi = others.indexOfFirst { "o_${it.id}" == fk }
             val ti = others.indexOfFirst { "o_${it.id}" == tk }
             if (fi >= 0 && ti >= 0) {
@@ -153,6 +296,9 @@ fun NotesScreen(
             }
         }
     }
+
+    val sortLabels = listOf("Custom", "Newest edited", "Newest created", "Oldest", "Title A–Z")
+    val unpinnedTotal = remember(notes) { notes.count { !it.pinned } }
 
     LazyVerticalStaggeredGrid(
         columns = StaggeredGridCells.Fixed(2),
@@ -180,11 +326,7 @@ fun NotesScreen(
                 }
             }
         }
-        if (filtered.isEmpty()) {
-            item(key = "empty", span = StaggeredGridItemSpan.FullLine) {
-                EmptyState("📝", if (query.isBlank()) "No notes yet" else "No matches", if (query.isBlank()) "Capture a thought with +" else "Try a different word")
-            }
-        }
+
         if (pinned.isNotEmpty()) {
             item(key = "h_pinned", span = StaggeredGridItemSpan.FullLine) { SectionHeader("Pinned", pinned.size) }
             items(pinned, key = { "p_${it.id}" }) { n ->
@@ -192,6 +334,7 @@ fun NotesScreen(
                 ReorderableItem(reorderState, key = "p_${n.id}", enabled = canTarget) { isDragging ->
                     NoteCard(
                         n = n,
+                        sizeMode = pinnedSizeMode,
                         dragging = isDragging,
                         modifier = Modifier.longPressDraggableHandle(
                             onDragStarted = {
@@ -209,30 +352,175 @@ fun NotesScreen(
                 }
             }
         }
-        if (others.isNotEmpty()) {
-            if (pinned.isNotEmpty()) item(key = "h_others", span = StaggeredGridItemSpan.FullLine) { SectionHeader("Others", others.size) }
+
+        if (unpinnedTotal > 0 || hasActiveFilter) {
+            item(key = "h_others", span = StaggeredGridItemSpan.FullLine) {
+                Column {
+                    SectionHeader(if (pinned.isNotEmpty()) "Others" else "All notes", others.size) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            // Minimal Filter icon button inline with Others header
+                            Row(
+                                Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(if (showFilterBar || hasActiveFilter) t.accentSoft else Color.Transparent)
+                                    .clickable {
+                                        showFilterBar = !showFilterBar
+                                        if (showFilterBar) showSortBar = false
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (colorFilter != null) {
+                                    Box(
+                                        Modifier
+                                            .size(10.dp)
+                                            .clip(CircleShape)
+                                            .background(Palette.vivid.getOrElse(colorFilter!!) { t.accentStrong })
+                                    )
+                                    Spacer(Modifier.width(5.dp))
+                                }
+                                Icon(
+                                    Icons.Rounded.FilterList,
+                                    contentDescription = "Filter notes",
+                                    tint = if (showFilterBar || hasActiveFilter) t.accentStrong else t.textMuted,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                            }
+
+                            // Minimal Sort icon button inline with Others header
+                            Row(
+                                Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(if (showSortBar || sortOrder != 0) t.accentSoft else Color.Transparent)
+                                    .clickable {
+                                        showSortBar = !showSortBar
+                                        if (showSortBar) showFilterBar = false
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Rounded.SwapVert,
+                                    contentDescription = "Sort notes",
+                                    tint = if (showSortBar || sortOrder != 0) t.accentStrong else t.textMuted,
+                                    modifier = Modifier.size(17.dp)
+                                )
+                                if (sortOrder != 0) {
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        sortLabels.getOrElse(sortOrder) { "" },
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = t.accentStrong
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Breathable expandable Filter strip
+                    AnimatedVisibility(visible = showFilterBar) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(t.card)
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            LazyRow(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                item {
+                                    SelectChip("All colours", colorFilter == null) { colorFilter = null }
+                                }
+                                itemsIndexed(Palette.pastels) { idx, _ ->
+                                    val sel = colorFilter == idx
+                                    Box(
+                                        Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(Palette.noteColor(idx, t.dark))
+                                            .border(
+                                                width = if (sel) 2.5.dp else 1.dp,
+                                                color = if (sel) t.accentStrong else t.divider,
+                                                shape = CircleShape
+                                            )
+                                            .clickable { colorFilter = if (sel) null else idx },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (sel) Icon(Icons.Rounded.Check, null, tint = t.text, modifier = Modifier.size(15.dp))
+                                    }
+                                }
+                            }
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                val types = listOf("All types", "Text", "Checklist", "Hidden", "Visible only")
+                                itemsIndexed(types) { idx, label ->
+                                    SelectChip(label, typeFilter == idx) { typeFilter = idx }
+                                }
+                            }
+                        }
+                    }
+
+                    // Breathable expandable Sort strip
+                    AnimatedVisibility(visible = showSortBar) {
+                        LazyRow(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(t.card)
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            itemsIndexed(sortLabels) { idx, label ->
+                                SelectChip(label, sortOrder == idx) {
+                                    onSortOrderChange(idx)
+                                    showSortBar = false
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             items(others, key = { "o_${it.id}" }) { n ->
-                val canTarget = activePinned == null || activePinned == false
+                val canTarget = canDragOthers && (activePinned == null || activePinned == false)
                 ReorderableItem(reorderState, key = "o_${n.id}", enabled = canTarget) { isDragging ->
                     NoteCard(
                         n = n,
+                        sizeMode = othersSizeMode,
                         dragging = isDragging,
-                        modifier = Modifier.longPressDraggableHandle(
-                            onDragStarted = {
-                                activePinned = false
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            },
-                            onDragStopped = {
-                                activePinned = null
-                                onReorder(others)
-                            }
-                        ),
+                        modifier = if (canDragOthers) {
+                            Modifier.longPressDraggableHandle(
+                                onDragStarted = {
+                                    activePinned = false
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                },
+                                onDragStopped = {
+                                    activePinned = null
+                                    onReorder(others)
+                                }
+                            )
+                        } else Modifier,
                         onClick = { onOpen(n) },
                         onPinClick = { onTogglePin(n) },
                     )
                 }
             }
         }
+
+        if (pinned.isEmpty() && others.isEmpty()) {
+            item(key = "empty", span = StaggeredGridItemSpan.FullLine) {
+                EmptyState(
+                    emoji = "📝",
+                    title = if (query.isBlank() && !hasActiveFilter) "No notes yet" else "No matching notes",
+                    subtitle = if (query.isBlank() && !hasActiveFilter) "Capture a thought with +" else "Try clearing your filter or search"
+                )
+            }
+        }
+
         item(key = "bottom_spacer", span = StaggeredGridItemSpan.FullLine) {
             Spacer(Modifier.height(140.dp))
         }
@@ -240,59 +528,140 @@ fun NotesScreen(
 }
 
 @Composable
-private fun NoteCard(
+fun NoteCard(
     n: Note,
-    dragging: Boolean,
-    modifier: Modifier,
+    sizeMode: Int = 0,
+    dragging: Boolean = false,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
-    onPinClick: () -> Unit,
+    onPinClick: (() -> Unit)? = null,
 ) {
     val t = tidy
     val bg = Palette.noteColor(n.colorIndex, t.dark)
     val fg = if (t.dark) t.text else Color(0xFF1C1B22)
     val elevation by animateDpAsState(if (dragging) 16.dp else 0.dp, label = "ne")
-    Column(
+    val heightMod = when (sizeMode) {
+        1 -> Modifier.height(116.dp)
+        2 -> Modifier.height(170.dp)
+        3 -> Modifier.height(232.dp)
+        else -> Modifier
+    }
+    val maxChecklistLines = when (sizeMode) {
+        1 -> 2
+        2 -> 4
+        3 -> 7
+        else -> 8
+    }
+    val maxBodyLines = when (sizeMode) {
+        1 -> 2
+        2 -> 5
+        3 -> 8
+        else -> 10
+    }
+
+    Box(
         modifier
             .fillMaxWidth()
+            .then(heightMod)
             .shadow(elevation, RoundedCornerShape(24.dp), ambientColor = t.accentStrong, spotColor = t.accentStrong)
             .clip(RoundedCornerShape(24.dp))
             .background(bg)
             .then(if (n.colorIndex == 0) Modifier.border(1.dp, t.divider, RoundedCornerShape(24.dp)) else Modifier)
             .bouncyClick(onClick = onClick, onDoubleClick = onPinClick)
-            .padding(16.dp)
     ) {
-        Row(verticalAlignment = Alignment.Top) {
-            if (n.title.isNotBlank()) Text(n.title, style = MaterialTheme.typography.titleMedium, color = fg, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            else Spacer(Modifier.weight(1f))
+        // Content layer (measured identically whether hidden or visible; real Gaussian blur applied when n.hidden)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .then(if (sizeMode != 0) Modifier.fillMaxHeight() else Modifier)
+                .realNoteBlur(enabled = n.hidden, cardBg = bg, fg = fg, isDark = t.dark)
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.Top) {
+                if (n.title.isNotBlank()) {
+                    Text(
+                        n.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = fg,
+                        maxLines = if (sizeMode == 1) 1 else 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).padding(end = if (onPinClick != null) 24.dp else 0.dp)
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f).height(4.dp))
+                }
+            }
+            if (n.isChecklist) {
+                val items = parseChecklist(n.content)
+                if (n.title.isNotBlank() && items.isNotEmpty()) Spacer(Modifier.height(6.dp))
+                items.take(maxChecklistLines).forEach {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                        Icon(if (it.done) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, null, tint = fg.copy(alpha = 0.55f), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            it.text.replace("\n", " · "),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = fg.copy(alpha = if (it.done) 0.45f else 0.8f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textDecoration = if (it.done) TextDecoration.LineThrough else null
+                        )
+                    }
+                }
+                if (items.size > maxChecklistLines) {
+                    Text("+${items.size - maxChecklistLines} more", style = MaterialTheme.typography.labelSmall, color = fg.copy(alpha = 0.5f))
+                }
+            } else if (n.content.isNotBlank()) {
+                if (n.title.isNotBlank()) Spacer(Modifier.height(6.dp))
+                Text(
+                    n.content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = fg.copy(alpha = 0.75f),
+                    maxLines = maxBodyLines,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (sizeMode != 0) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(10.dp))
+            Text(
+                SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(n.updatedAt)),
+                style = MaterialTheme.typography.labelSmall,
+                color = fg.copy(alpha = 0.4f)
+            )
+        }
+
+        // Subtle frosted eye-off badge centered over blurred notes
+        if (n.hidden) {
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(50))
+                    .background(fg.copy(alpha = if (t.dark) 0.14f else 0.10f))
+                    .border(0.8.dp, fg.copy(alpha = 0.16f), RoundedCornerShape(50))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.VisibilityOff, "Hidden note", tint = fg.copy(alpha = 0.72f), modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Hidden", style = MaterialTheme.typography.labelSmall, color = fg.copy(alpha = 0.72f))
+                }
+            }
+        }
+
+        // Sharp clickable pin icon in top-right corner
+        if (onPinClick != null) {
             Icon(
                 Icons.Rounded.PushPin,
                 contentDescription = if (n.pinned) "Unpin note" else "Pin note",
                 tint = if (n.pinned) fg.copy(alpha = 0.65f) else fg.copy(alpha = 0.22f),
                 modifier = Modifier
-                    .size(22.dp)
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .size(24.dp)
                     .clip(CircleShape)
                     .clickable(onClick = onPinClick)
-                    .padding(3.dp)
+                    .padding(4.dp)
             )
         }
-        if (n.isChecklist) {
-            val items = parseChecklist(n.content)
-            if (n.title.isNotBlank() && items.isNotEmpty()) Spacer(Modifier.height(8.dp))
-            items.take(8).forEach {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                    Icon(if (it.done) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, null, tint = fg.copy(alpha = 0.55f), modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(it.text, style = MaterialTheme.typography.bodyMedium, color = fg.copy(alpha = if (it.done) 0.45f else 0.8f), maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        textDecoration = if (it.done) TextDecoration.LineThrough else null)
-                }
-            }
-            if (items.size > 8) Text("+${items.size - 8} more", style = MaterialTheme.typography.labelSmall, color = fg.copy(alpha = 0.5f))
-        } else if (n.content.isNotBlank()) {
-            if (n.title.isNotBlank()) Spacer(Modifier.height(6.dp))
-            Text(n.content, style = MaterialTheme.typography.bodyMedium, color = fg.copy(alpha = 0.75f), maxLines = 10, overflow = TextOverflow.Ellipsis)
-        }
-        Spacer(Modifier.height(10.dp))
-        Text(SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(n.updatedAt)), style = MaterialTheme.typography.labelSmall, color = fg.copy(alpha = 0.4f))
     }
 }
 
@@ -303,6 +672,7 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
     var content by remember { mutableStateOf(initial.content) }
     var color by remember { mutableIntStateOf(initial.colorIndex) }
     var pinned by remember { mutableStateOf(initial.pinned) }
+    var hidden by remember { mutableStateOf(initial.hidden) }
     var checklist by remember { mutableStateOf(initial.isChecklist) }
     val items = remember { mutableStateListOf<CheckItem>().apply { if (initial.isChecklist) addAll(parseChecklist(initial.content)) } }
     val savedDoneStates = remember { mutableMapOf<String, Boolean>() }
@@ -315,9 +685,20 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
     }
     fun close() {
         val c = currentContent()
-        val changed = title != initial.title || c != initial.content || color != initial.colorIndex || pinned != initial.pinned || checklist != initial.isChecklist
+        val changed = title != initial.title || c != initial.content || color != initial.colorIndex ||
+            pinned != initial.pinned || hidden != initial.hidden || checklist != initial.isChecklist
         if ((title.isNotBlank() || c.isNotBlank()) && changed) {
-            onSave(initial.copy(title = title.trim(), content = c, colorIndex = color, pinned = pinned, isChecklist = checklist, updatedAt = System.currentTimeMillis()))
+            onSave(
+                initial.copy(
+                    title = title.trim(),
+                    content = c,
+                    colorIndex = color,
+                    pinned = pinned,
+                    hidden = hidden,
+                    isChecklist = checklist,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
         }
         onClose()
     }
@@ -331,9 +712,16 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { close() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = fg) }
                 Spacer(Modifier.weight(1f))
+                // Hide / Blur note toggle button
+                IconButton(onClick = { hidden = !hidden }) {
+                    Icon(
+                        if (hidden) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                        contentDescription = if (hidden) "Unhide note" else "Hide note on Notes screen",
+                        tint = if (hidden) t.accentStrong else fg.copy(alpha = 0.55f)
+                    )
+                }
                 IconButton(onClick = {
                     if (!checklist) {
-                        // Switching Simple Text -> Checklist: split only on real newlines, keeping \u200B\n inside the same item
                         val parsed = content
                             .replace(IN_ITEM_NL, "\u0000")
                             .split("\n")
@@ -343,7 +731,6 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
                         items.clear()
                         items.addAll(parsed)
                     } else {
-                        // Switching Checklist -> Simple Text: encode in-item newlines with invisible \u200B\n so multi-line items stay grouped
                         val allItems = items + listOfNotNull(newItem.takeIf { it.isNotBlank() }?.let { CheckItem(false, it.trim()) })
                         newItem = ""
                         savedDoneStates.clear()
@@ -355,6 +742,20 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
                 IconButton(onClick = { pinned = !pinned }) { Icon(Icons.Rounded.PushPin, "Pin", tint = if (pinned) t.accentStrong else fg.copy(alpha = 0.45f)) }
                 if (initial.id != 0L) {
                     ConfirmDeleteButton(onConfirmDelete = { onDelete(initial); onClose() }, iconTint = fg)
+                }
+            }
+            AnimatedVisibility(visible = hidden) {
+                Row(
+                    Modifier
+                        .padding(horizontal = 24.dp, vertical = 4.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(fg.copy(alpha = 0.08f))
+                        .padding(horizontal = 12.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Rounded.VisibilityOff, null, tint = t.accentStrong, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Blurred on Notes screen & hidden from widget picker", style = MaterialTheme.typography.labelSmall, color = fg.copy(alpha = 0.75f))
                 }
             }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {

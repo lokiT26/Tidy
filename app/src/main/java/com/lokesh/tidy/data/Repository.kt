@@ -16,7 +16,7 @@ import java.time.ZoneId
 
 class Repository private constructor(private val context: Context) {
     val db: TidyDatabase = Room.databaseBuilder(context, TidyDatabase::class.java, "tidy.db")
-        .addMigrations(TidyDatabase.MIGRATION_1_2)
+        .addMigrations(TidyDatabase.MIGRATION_1_2, TidyDatabase.MIGRATION_2_3)
         .fallbackToDestructiveMigration()
         .build()
     val dao = db.dao()
@@ -148,7 +148,7 @@ class Repository private constructor(private val context: Context) {
             }
         })
         root.put("notes", JSONArray().apply {
-            dao.allNotes().forEach { put(JSONObject().put("title", it.title).put("content", it.content).put("color", it.colorIndex).put("pinned", it.pinned).put("checklist", it.isChecklist).put("createdAt", it.createdAt).put("updatedAt", it.updatedAt).put("sort", it.sortOrder)) }
+            dao.allNotes().forEach { put(JSONObject().put("title", it.title).put("content", it.content).put("color", it.colorIndex).put("pinned", it.pinned).put("checklist", it.isChecklist).put("createdAt", it.createdAt).put("updatedAt", it.updatedAt).put("sort", it.sortOrder).put("hidden", it.hidden)) }
         })
         return root.toString(2)
     }
@@ -181,7 +181,7 @@ class Repository private constructor(private val context: Context) {
         val notes = root.optJSONArray("notes") ?: JSONArray()
         dao.insertNotesRaw((0 until notes.length()).map { i ->
             val o = notes.getJSONObject(i)
-            Note(title = o.optString("title"), content = o.optString("content"), colorIndex = o.optInt("color"), pinned = o.optBoolean("pinned"), isChecklist = o.optBoolean("checklist"), createdAt = o.optLong("createdAt"), updatedAt = o.optLong("updatedAt"), sortOrder = o.optInt("sort", i))
+            Note(title = o.optString("title"), content = o.optString("content"), colorIndex = o.optInt("color"), pinned = o.optBoolean("pinned"), isChecklist = o.optBoolean("checklist"), createdAt = o.optLong("createdAt"), updatedAt = o.optLong("updatedAt"), sortOrder = o.optInt("sort", i), hidden = o.optBoolean("hidden", false))
         })
         changed()
     }

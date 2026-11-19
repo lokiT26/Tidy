@@ -82,7 +82,9 @@ private fun ConfigScreen(
 ) {
     val ctx = LocalContext.current
     val t = tidy
-    var cfg by remember { mutableStateOf(WidgetPrefs.load(ctx, wid)) }
+    var cfg by remember { mutableStateOf(WidgetPrefs.load(ctx, wid, kind)) }
+    // Hidden/blurred notes are excluded from the widget selector (#1)
+    val visibleNotes = remember(notes) { notes.filter { !it.hidden } }
 
     AmbientBackground {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -92,7 +94,7 @@ private fun ConfigScreen(
                     .background(Brush.linearGradient(listOf(Color(0xFF9183F4), Color(0xFFFFB499), Color(0xFF8FD9C4)))),
                 contentAlignment = Alignment.Center
             ) {
-                WidgetPreview(cfg, kind, notes, categories)
+                WidgetPreview(cfg, kind, visibleNotes, categories)
             }
 
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
@@ -114,14 +116,14 @@ private fun ConfigScreen(
                 }
                 if (kind == WidgetKind.STICKY) {
                     Section("Note to display") {
-                        if (notes.isEmpty()) {
-                            Text("No notes yet — your newest note will appear automatically.", style = MaterialTheme.typography.bodySmall, color = t.textMuted)
+                        if (visibleNotes.isEmpty()) {
+                            Text("No visible notes yet — your newest unhidden note will appear automatically.", style = MaterialTheme.typography.bodySmall, color = t.textMuted)
                         } else {
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 item {
                                     SelectChip("✨ Latest note (auto)", cfg.noteId == -1L) { cfg = cfg.copy(noteId = -1L) }
                                 }
-                                items(notes) { n ->
+                                items(visibleNotes) { n ->
                                     val label = n.title.ifBlank { n.content.replace("\u200B", "").lines().firstOrNull()?.removePrefix("[ ] ")?.removePrefix("[x] ")?.take(18) ?: "Untitled" }.ifBlank { "Untitled" }
                                     SelectChip(label, cfg.noteId == n.id) { cfg = cfg.copy(noteId = n.id) }
                                 }
@@ -133,34 +135,32 @@ private fun ConfigScreen(
                     Section("Button action") {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             SelectChip("+ New Task", cfg.quickAction == 0) { cfg = cfg.copy(quickAction = 0) }
-                            SelectChip("✎ New Note", cfg.quickAction == 1) { cfg = cfg.copy(quickAction = 1) }
+                            SelectChip("+ New Note", cfg.quickAction == 1) { cfg = cfg.copy(quickAction = 1) }
                         }
                     }
                 }
 
-                if (kind != WidgetKind.QUICK) {
-                    val bgStyles = if (kind == WidgetKind.STICKY) {
-                        listOf("Note colour", "Solid", "Gradient", "Frosted glass", "Pastel")
-                    } else {
-                        listOf("Solid", "Gradient", "Frosted glass", "Pastel")
-                    }
-                    Section("Background style") {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            bgStyles.forEachIndexed { i, l ->
-                                item { SelectChip(l, cfg.bgStyle == i) { cfg = cfg.copy(bgStyle = i) } }
-                            }
+                // Background style & Theme available on ALL widgets (including Quick Add #6!)
+                val bgStyles = if (kind == WidgetKind.STICKY) {
+                    listOf("Note colour", "Solid", "Gradient", "Frosted glass", "Pastel")
+                } else {
+                    listOf("Solid", "Gradient", "Frosted glass", "Pastel")
+                }
+                Section("Background style") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        bgStyles.forEachIndexed { i, l ->
+                            item { SelectChip(l, cfg.bgStyle == i) { cfg = cfg.copy(bgStyle = i) } }
                         }
                     }
-                    Section("Theme") {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf("Follow system", "Light", "Dark", "AMOLED").forEachIndexed { i, l ->
-                                item { SelectChip(l, cfg.theme == i) { cfg = cfg.copy(theme = i) } }
-                            }
+                }
+                Section("Theme") {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("Follow system", "Light", "Dark", "AMOLED").forEachIndexed { i, l ->
+                            item { SelectChip(l, cfg.theme == i) { cfg = cfg.copy(theme = i) } }
                         }
                     }
                 }
 
-                // Opacity & Corner Radius available on ALL widgets (including Quick Add!)
                 Section("Opacity · ${cfg.opacity}%") {
                     Slider(cfg.opacity.toFloat(), { cfg = cfg.copy(opacity = it.roundToInt()) }, valueRange = 20f..100f)
                 }
@@ -236,13 +236,18 @@ private fun WidgetPreview(cfg: WidgetCfg, kind: WidgetKind, notes: List<Note>, c
         return
     }
     val isSticky = kind == WidgetKind.STICKY
+    val isRing = kind == WidgetKind.RING
     val selectedNote = remember(notes, cfg.noteId) {
         if (!isSticky) null
         else if (cfg.noteId != -1L) notes.find { it.id == cfg.noteId } ?: notes.maxByOrNull { it.updatedAt }
         else notes.maxByOrNull { it.updatedAt }
     }
     val noteColor = if (isSticky) (selectedNote?.colorIndex ?: 5) else null
-    val bmp = remember(cfg, noteColor, isSticky) { WidgetArt.cardBitmap(ctx, cfg, 280f, 155f, noteColor, isSticky).asImageBitmap() }
+    val previewW = if (isRing) 236f else 280f
+    val previewH = if (isRing) 82f else 155f
+    val bmp = remember(cfg, noteColor, isSticky, isRing) {
+        WidgetArt.cardBitmap(ctx, cfg, previewW, previewH, noteColor, isSticky).asImageBitmap()
+    }
     val dark = cfg.isDark(ctx)
     val effStyle = WidgetArt.effectiveStyle(cfg, isSticky)
     val fg = if (effStyle == -1 && !dark) Color(0xFF1C1B22) else if (dark) Color(0xFFF3F2F7) else Color(0xFF1A1922)
@@ -251,23 +256,26 @@ private fun WidgetPreview(cfg: WidgetCfg, kind: WidgetKind, notes: List<Note>, c
     val ff = when (cfg.fontStyle) { 1 -> FontFamily.Serif; 2 -> FontFamily.Monospace; else -> FontFamily.SansSerif }
     val sc = when (cfg.fontScale) { 0 -> 0.88f; 2 -> 1.15f; else -> 1f }
 
-    Box(Modifier.width(276.dp).height(154.dp)) {
+    Box(Modifier.width(previewW.dp).height(previewH.dp)) {
         Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
         when (kind) {
             WidgetKind.RING -> {
-                val ringBmp = remember(cfg) { WidgetArt.ringBitmap(ctx, cfg, 5, 8).asImageBitmap() }
+                val ringBmp = remember(cfg) { WidgetArt.ringBitmap(ctx, cfg, 5, 8, sizeDp = 54).asImageBitmap() }
+                val barBmp = remember(cfg) { WidgetArt.progressBarBitmap(ctx, cfg, 5, 8).asImageBitmap() }
                 Row(
-                    Modifier.fillMaxSize().padding(if (cfg.density == 1) 12.dp else 16.dp),
+                    Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Image(ringBmp, null, Modifier.size(82.dp))
-                    Spacer(Modifier.width(14.dp))
-                    Column {
-                        Text("TODAY", color = fgMuted, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (10 * sc).sp)
-                        Text("5 of 8", color = fg, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (17 * sc).sp)
-                        Text("done", color = fgMuted, fontFamily = ff, fontSize = (12 * sc).sp)
+                    Image(ringBmp, null, Modifier.size(52.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("TODAY", color = fgMuted, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (10 * sc).sp, modifier = Modifier.weight(1f))
+                            Text("🔥 6d", color = accentColor, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (11 * sc).sp)
+                        }
+                        Text("5 of 8 done", color = fg, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (14.5f * sc).sp, maxLines = 1)
                         Spacer(Modifier.height(4.dp))
-                        Text("🔥 6 d", color = accentColor, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (12 * sc).sp)
+                        Image(barBmp, null, Modifier.fillMaxWidth().height(5.dp), contentScale = ContentScale.FillBounds)
                     }
                 }
             }
