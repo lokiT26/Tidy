@@ -243,8 +243,8 @@ private fun WidgetPreview(cfg: WidgetCfg, kind: WidgetKind, notes: List<Note>, c
         else notes.maxByOrNull { it.updatedAt }
     }
     val noteColor = if (isSticky) (selectedNote?.colorIndex ?: 5) else null
-    val previewW = if (isRing) 236f else 280f
-    val previewH = if (isRing) 82f else 155f
+    val previewW = if (isRing) 288f else 280f
+    val previewH = if (isRing) 78f else 155f
     val bmp = remember(cfg, noteColor, isSticky, isRing) {
         WidgetArt.cardBitmap(ctx, cfg, previewW, previewH, noteColor, isSticky).asImageBitmap()
     }
@@ -267,13 +267,13 @@ private fun WidgetPreview(cfg: WidgetCfg, kind: WidgetKind, notes: List<Note>, c
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Image(ringBmp, null, Modifier.size(52.dp))
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("TODAY", color = fgMuted, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (10 * sc).sp, modifier = Modifier.weight(1f))
-                            Text("🔥 6d", color = accentColor, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (11 * sc).sp)
+                            Text("TODAY'S PROGRESS", color = fgMuted, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (10 * sc).sp, modifier = Modifier.weight(1f))
+                            Text("🔥 6 day streak", color = accentColor, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (11 * sc).sp)
                         }
-                        Text("5 of 8 done", color = fg, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (14.5f * sc).sp, maxLines = 1)
+                        Text("5 of 8 tasks done", color = fg, fontFamily = ff, fontWeight = FontWeight.Bold, fontSize = (14.5f * sc).sp, maxLines = 1)
                         Spacer(Modifier.height(4.dp))
                         Image(barBmp, null, Modifier.fillMaxWidth().height(5.dp), contentScale = ContentScale.FillBounds)
                     }

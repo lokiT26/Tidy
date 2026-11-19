@@ -49,7 +49,9 @@ fun SearchScreen(
         (q.isBlank() || it.task.title.contains(q, true) || it.task.notes.contains(q, true) || it.subtasks.any { s -> s.title.contains(q, true) }) &&
             (filter != 3 || it.task.priority == 3) && (q.isNotBlank() || filter == 3)
     }
-    val nr = if (filter == 1 || filter == 3 || q.isBlank()) emptyList() else notes.filter { it.title.contains(q, true) || it.content.contains(q, true) }
+    val nr = if (filter == 1 || filter == 3 || q.isBlank()) emptyList() else notes.filter {
+        it.title.contains(q, true) || (!it.hidden && it.content.contains(q, true))
+    }
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 18.dp, end = 18.dp, bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {

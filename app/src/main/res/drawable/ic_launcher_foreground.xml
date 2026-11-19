@@ -1,8 +1,38 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#33FFFFFF"
-        android:pathData="M34,30h40a10,10 0 0,1 10,10v34a10,10 0 0,1 -10,10h-40a10,10 0 0,1 -10,-10v-34a10,10 0 0,1 10,-10z"/>
-    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="6.5" android:strokeLineCap="round" android:strokeLineJoin="round"
-        android:pathData="M39,55 L49,65 L70,43"/>
+    <!-- Subtle soft drop shadow centered behind squircle -->
+    <path android:fillColor="#1A181038"
+        android:pathData="M44,32h20a14,14 0 0,1 14,14v20a14,14 0 0,1 -14,14h-20a14,14 0 0,1 -14,-14v-20a14,14 0 0,1 14,-14z"/>
+    <!-- Frosted glass squircle centered at (54, 54): x=30..78, y=30..78 -->
+    <path android:pathData="M44,30h20a14,14 0 0,1 14,14v20a14,14 0 0,1 -14,14h-20a14,14 0 0,1 -14,-14v-20a14,14 0 0,1 14,-14z">
+        <aapt:attr name="android:fillColor">
+            <gradient android:startX="30" android:startY="30" android:endX="78" android:endY="78" android:type="linear">
+                <item android:offset="0" android:color="#4DFFFFFF"/>
+                <item android:offset="1" android:color="#24FFFFFF"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Frosted glass border highlight -->
+    <path android:strokeWidth="1.4"
+        android:pathData="M44,30h20a14,14 0 0,1 14,14v20a14,14 0 0,1 -14,14h-20a14,14 0 0,1 -14,-14v-20a14,14 0 0,1 14,-14z">
+        <aapt:attr name="android:strokeColor">
+            <gradient android:startX="30" android:startY="30" android:endX="78" android:endY="78" android:type="linear">
+                <item android:offset="0" android:color="#B8FFFFFF"/>
+                <item android:offset="1" android:color="#36FFFFFF"/>
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Mathematically & optically centered checkmark: x=41.5..66.5 (center 54), y=45.5..62.5 (center 54) -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="6.2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M41.5,54.5 L50.0,62.8 L66.5,45.5"/>
+    <!-- 4-point sparkle accent at top-right inside card (67, 38) -->
+    <path
+        android:fillColor="#FFFFF3B8"
+        android:pathData="M67,33.5 C67.5,36.4 68.6,37.5 71.5,38 C68.6,38.5 67.5,39.6 67,42.5 C66.5,39.6 65.4,38.5 62.5,38 C65.4,37.5 66.5,36.4 67,33.5 Z"/>
 </vector>

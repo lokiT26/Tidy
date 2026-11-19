@@ -43,6 +43,7 @@ private val checkIndexKey = ActionParameters.Key<Int>("check_idx")
 private val widgetIdKey = ActionParameters.Key<Int>("widget_id")
 private val epochDayKey = ActionParameters.Key<Long>("epoch_day")
 private val tickPrefKey = longPreferencesKey("tick")
+private val selectedDayPrefKey = longPreferencesKey("selected_day")
 
 /** Helper that attaches a click action WITHOUT Android/One UI's gray sharp-edged rectangle ripple. */
 private fun GlanceModifier.noRippleClick(action: Action): GlanceModifier =
@@ -54,7 +55,6 @@ class ToggleTaskAction : ActionCallback {
         val repo = Repository.get(context)
         val t = repo.dao.task(id)?.task ?: return
         repo.setCompleted(id, !t.completed)
-        WidgetUpdater.updateAll(context)
     }
 }
 
@@ -69,7 +69,6 @@ class ToggleNoteCheckAction : ActionCallback {
         if (idx !in items.indices) return
         items[idx] = items[idx].copy(done = !items[idx].done)
         repo.saveNote(note.copy(content = serializeChecklist(items), updatedAt = System.currentTimeMillis()))
-        WidgetUpdater.updateAll(context)
     }
 }
 
@@ -78,7 +77,14 @@ class SelectCalendarDayAction : ActionCallback {
         val wid = parameters[widgetIdKey] ?: GlanceAppWidgetManager(context).getAppWidgetId(glanceId)
         val day = parameters[epochDayKey] ?: return
         WidgetPrefs.setSelectedDay(context, wid, day)
-        WidgetUpdater.updateAll(context)
+        // Update ONLY this CalendarWidget instance through Glance's single-threaded session state
+        runCatching {
+            updateAppWidgetState(context, glanceId) { prefs ->
+                prefs[selectedDayPrefKey] = day
+                prefs[tickPrefKey] = System.nanoTime()
+            }
+            CalendarWidget().update(context, glanceId)
+        }
     }
 }
 
@@ -98,7 +104,6 @@ object WidgetUpdater {
     }
 
     suspend fun updateAll(ctx: Context) {
-        WidgetPrefs.bump()
         pushUpdate(ctx, TodoWidget())
         pushUpdate(ctx, RingWidget())
         pushUpdate(ctx, StickyWidget())
@@ -131,10 +136,6 @@ private fun WidgetCfg.accentColor() = ColorProvider(Palette.accents.getOrElse(ac
 private fun WidgetCfg.fontFamily() = when (fontStyle) { 1 -> FontFamily.Serif; 2 -> FontFamily.Monospace; else -> FontFamily.SansSerif }
 private fun WidgetCfg.scale() = when (fontScale) { 0 -> 0.88f; 2 -> 1.15f; else -> 1f }
 
-/**
- * Creates an Intent with a unique data URI (including optional date, categoryId, or someday flags)
- * so Android's PendingIntent cache never conflates different widget actions or context defaults.
- */
 private fun appIntent(
     ctx: Context,
     action: String? = null,
@@ -158,12 +159,16 @@ private fun appIntent(
     if (prefillSomeday) putExtra(MainActivity.EXTRA_SOMEDAY, true)
 }
 
+/**
+ * Renders the widget card shell at the EXACT live widget dimensions (`LocalSize.current`)
+ * so corner radii remain true circular arcs at every aspect ratio when resized (#3).
+ */
 @Composable
 private fun CardShell(
     ctx: Context,
     cfg: WidgetCfg,
-    wDp: Float = 320f,
-    hDp: Float = 240f,
+    fallbackW: Float = 260f,
+    fallbackH: Float = 180f,
     noteColor: Int? = null,
     isSticky: Boolean = false,
     padH: Int? = null,
@@ -171,8 +176,17 @@ private fun CardShell(
     onClick: Intent = appIntent(ctx),
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val liveSize = LocalSize.current
+    val wDp = liveSize.width.value.takeIf { it > 24f } ?: fallbackW
+    val hDp = liveSize.height.value.takeIf { it > 24f } ?: fallbackH
     val bg = ImageProvider(WidgetArt.cardBitmap(ctx, cfg, wDp = wDp, hDp = hDp, noteColorIdx = noteColor, isSticky = isSticky))
-    val defaultPad = if (cfg.density == 1) 12 else 16
+    val minSide = minOf(wDp, hDp)
+    val defaultPad = when {
+        minSide < 75f -> 8
+        minSide < 110f -> 11
+        cfg.density == 1 -> 12
+        else -> 15
+    }
     Box(GlanceModifier.fillMaxSize().padding(2.dp)) {
         Image(
             provider = bg,
@@ -199,10 +213,11 @@ class TodoWidget : GlanceAppWidget() {
         val initTasks = repo.dao.allTasks()
         provideContent {
             val tick = currentState(tickPrefKey)
-            val prefTick by WidgetPrefs.version.collectAsState()
             val cats by repo.categories.collectAsState(initial = initCats)
             val all by repo.tasks.collectAsState(initial = initTasks)
             val cfg = WidgetPrefs.load(context, wid, WidgetKind.TODO)
+            val liveSize = LocalSize.current
+            val compactWidth = liveSize.width.value in 1f..150f
             val today = LocalDate.now().toEpochDay()
 
             val filtered = all.filter {
@@ -236,7 +251,7 @@ class TodoWidget : GlanceAppWidget() {
                 -1L -> "All Tasks"
                 -2L -> "Today"
                 -3L -> "Today Only"
-                -4L -> "Today & Someday"
+                -4L -> if (compactWidth) "Today+" else "Today & Someday"
                 -5L -> "Upcoming"
                 -6L -> "Someday"
                 else -> cats.find { it.id == cfg.listFilter }?.let { "${it.emoji} ${it.name}".trim() } ?: "Tasks"
@@ -244,12 +259,11 @@ class TodoWidget : GlanceAppWidget() {
             val overdueCount = filtered.count { !it.task.completed && it.task.dueDate != null && it.task.dueDate < today }
             val remainingCount = filtered.count { !it.task.completed }
             val subtitleText = if (overdueCount > 0 && cfg.listFilter in listOf(-1L, -2L)) {
-                "$remainingCount left · $overdueCount overdue"
+                if (compactWidth) "$remainingCount · $overdueCount late" else "$remainingCount left · $overdueCount overdue"
             } else {
                 "$remainingCount remaining"
             }
 
-            // Context-aware '+' and header intents (#8)
             val prefillCat = cfg.listFilter.takeIf { it >= 0L }
             val prefillDate = when (cfg.listFilter) {
                 -2L, -3L -> today
@@ -257,12 +271,7 @@ class TodoWidget : GlanceAppWidget() {
                 else -> null
             }
             val prefillSomeday = cfg.listFilter == -6L
-            val openListIntent = appIntent(
-                context,
-                action = null,
-                wid = wid,
-                prefillCategory = prefillCat
-            )
+            val openListIntent = appIntent(context, action = null, wid = wid, prefillCategory = prefillCat)
             val newTaskIntent = appIntent(
                 context,
                 action = MainActivity.ACTION_NEW_TASK,
@@ -272,19 +281,22 @@ class TodoWidget : GlanceAppWidget() {
                 prefillSomeday = prefillSomeday
             )
 
-            val sc = cfg.scale(); val ff = cfg.fontFamily(); val dark = cfg.isDark(context)
+            val sc = cfg.scale() * (if (compactWidth) 0.92f else 1f)
+            val ff = cfg.fontFamily()
+            val dark = cfg.isDark(context)
             val overdueColor = ColorProvider(Color(0xFFFF5C6C))
 
-            CardShell(context, cfg, onClick = openListIntent) {
+            CardShell(context, cfg, fallbackW = 240f, fallbackH = 220f, onClick = openListIntent) {
                 Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(GlanceModifier.defaultWeight().noRippleClick(actionStartActivity(openListIntent))) {
-                        Text(title, style = TextStyle(color = cfg.textColor(context), fontSize = (17 * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff))
-                        Text(subtitleText, style = TextStyle(color = if (overdueCount > 0) overdueColor else cfg.mutedColor(context), fontSize = (11 * sc).sp, fontFamily = ff))
+                        Text(title, maxLines = 1, style = TextStyle(color = cfg.textColor(context), fontSize = (16.5f * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff))
+                        Text(subtitleText, maxLines = 1, style = TextStyle(color = if (overdueCount > 0) overdueColor else cfg.mutedColor(context), fontSize = (11 * sc).sp, fontFamily = ff))
                     }
+                    val fabSize = if (compactWidth) 28 else 32
                     Image(
-                        provider = ImageProvider(WidgetArt.fabBitmap(context, cfg.accent, 32)),
+                        provider = ImageProvider(WidgetArt.fabBitmap(context, cfg.accent, fabSize)),
                         contentDescription = "Add",
-                        modifier = GlanceModifier.size(32.dp).noRippleClick(actionStartActivity(newTaskIntent))
+                        modifier = GlanceModifier.size(fabSize.dp).noRippleClick(actionStartActivity(newTaskIntent))
                     )
                 }
                 Spacer(GlanceModifier.height(6.dp))
@@ -301,22 +313,22 @@ class TodoWidget : GlanceAppWidget() {
                             val t = tw.task
                             val isOverdue = !t.completed && t.dueDate != null && t.dueDate < today
                             Row(
-                                GlanceModifier.fillMaxWidth().padding(vertical = if (cfg.density == 1) 2.dp else 4.dp),
+                                GlanceModifier.fillMaxWidth().padding(vertical = if (cfg.density == 1) 2.dp else 3.5.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Box(
                                     GlanceModifier
-                                        .size(32.dp)
+                                        .size(30.dp)
                                         .noRippleClick(actionRunCallback<ToggleTaskAction>(actionParametersOf(taskIdKey to t.id))),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Image(
                                         provider = ImageProvider(WidgetArt.checkIcon(context, t.completed, t.priority, cfg.accent, dark)),
                                         contentDescription = "Check",
-                                        modifier = GlanceModifier.size(22.dp)
+                                        modifier = GlanceModifier.size(21.dp)
                                     )
                                 }
-                                Spacer(GlanceModifier.width(6.dp))
+                                Spacer(GlanceModifier.width(5.dp))
                                 Column(
                                     GlanceModifier
                                         .defaultWeight()
@@ -327,7 +339,7 @@ class TodoWidget : GlanceAppWidget() {
                                         t.title, maxLines = 1,
                                         style = TextStyle(
                                             color = if (t.completed) cfg.mutedColor(context) else cfg.textColor(context),
-                                            fontSize = (14 * sc).sp, fontWeight = FontWeight.Medium, fontFamily = ff,
+                                            fontSize = (13.8f * sc).sp, fontWeight = FontWeight.Medium, fontFamily = ff,
                                             textDecoration = if (t.completed) TextDecoration.LineThrough else TextDecoration.None
                                         )
                                     )
@@ -345,7 +357,7 @@ class TodoWidget : GlanceAppWidget() {
                                             sub,
                                             style = TextStyle(
                                                 color = if (isOverdue) overdueColor else cfg.mutedColor(context),
-                                                fontSize = (11 * sc).sp,
+                                                fontSize = (10.8f * sc).sp,
                                                 fontFamily = ff
                                             ),
                                             maxLines = 1
@@ -354,7 +366,6 @@ class TodoWidget : GlanceAppWidget() {
                                 }
                             }
                         }
-                        // Clickable empty space below items so tapping empty space opens the app (#7)
                         item(itemId = -999L) {
                             Box(
                                 GlanceModifier
@@ -370,7 +381,7 @@ class TodoWidget : GlanceAppWidget() {
     }
 }
 
-// ---------- 2. Today Progress 2×1 Horizontal Widget (#9) ----------
+// ---------- 2. Today Progress Widget (3×1 default + dynamic 1×1, 2×1, 3×1+ layouts) (#4) ----------
 class RingWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Exact
     override suspend fun provideGlance(context: Context, id: GlanceId) {
@@ -379,9 +390,11 @@ class RingWidget : GlanceAppWidget() {
         val initTasks = repo.dao.allTasks()
         provideContent {
             val tick = currentState(tickPrefKey)
-            val prefTick by WidgetPrefs.version.collectAsState()
             val allTw by repo.tasks.collectAsState(initial = initTasks)
             val cfg = WidgetPrefs.load(context, wid, WidgetKind.RING)
+            val liveSize = LocalSize.current
+            val wDp = liveSize.width.value.takeIf { it > 20f } ?: 220f
+            val hDp = liveSize.height.value.takeIf { it > 20f } ?: 76f
             val all = allTw.map { it.task }
             val today = LocalDate.now().toEpochDay()
             val pool = all.filter { val d = it.dueDate; d != null && (d == today || (d < today && (!it.completed || isToday(it.completedAt)))) }
@@ -391,41 +404,140 @@ class RingWidget : GlanceAppWidget() {
             val sc = cfg.scale(); val ff = cfg.fontFamily()
             val homeIntent = appIntent(context, wid = wid)
 
-            CardShell(context, cfg, wDp = 240f, hDp = 82f, padH = 14, padV = 8, onClick = homeIntent) {
-                Row(
-                    GlanceModifier.fillMaxSize().noRippleClick(actionStartActivity(homeIntent)),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Image(
-                        provider = ImageProvider(WidgetArt.ringBitmap(context, cfg, done, total, sizeDp = 54)),
-                        contentDescription = "Progress",
-                        modifier = GlanceModifier.size(52.dp)
-                    )
-                    Spacer(GlanceModifier.width(12.dp))
-                    Column(GlanceModifier.defaultWeight()) {
-                        Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            val is1x1 = wDp < 115f
+            val isWide3x1 = wDp >= 195f
+            val isTall = hDp >= 135f
+            val padH = if (is1x1) 6 else 14
+            val padV = if (is1x1) 6 else 8
+
+            CardShell(context, cfg, fallbackW = 220f, fallbackH = 76f, padH = padH, padV = padV, onClick = homeIntent) {
+                if (is1x1 && !isTall) {
+                    // 1×1 compact cell: centered Progress Ring + streak badge below
+                    Column(
+                        GlanceModifier.fillMaxSize().noRippleClick(actionStartActivity(homeIntent)),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val ringSz = (minOf(wDp, hDp) * 0.56f).toInt().coerceIn(34, 48)
+                        Image(
+                            provider = ImageProvider(WidgetArt.ringBitmap(context, cfg, done, total, sizeDp = ringSz)),
+                            contentDescription = "Progress",
+                            modifier = GlanceModifier.size(ringSz.dp)
+                        )
+                        Spacer(GlanceModifier.height(2.dp))
+                        Text(
+                            "🔥 ${streak}d",
+                            maxLines = 1,
+                            style = TextStyle(color = cfg.accentColor(), fontSize = (10.5f * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff)
+                        )
+                    }
+                } else if (is1x1 && isTall) {
+                    // 1×2+ vertical tower: ring on top, status + streak stacked below
+                    Column(
+                        GlanceModifier.fillMaxSize().noRippleClick(actionStartActivity(homeIntent)),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Image(
+                            provider = ImageProvider(WidgetArt.ringBitmap(context, cfg, done, total, sizeDp = 50)),
+                            contentDescription = "Progress",
+                            modifier = GlanceModifier.size(48.dp)
+                        )
+                        Spacer(GlanceModifier.height(6.dp))
+                        Text(
+                            "$done/$total",
+                            maxLines = 1,
+                            style = TextStyle(color = cfg.textColor(context), fontSize = (13.5f * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff)
+                        )
+                        Text(
+                            "🔥 ${streak}d",
+                            maxLines = 1,
+                            style = TextStyle(color = cfg.accentColor(), fontSize = (11 * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff)
+                        )
+                    }
+                } else if (!isWide3x1) {
+                    // 2×1 compact horizontal layout
+                    Row(
+                        GlanceModifier.fillMaxSize().noRippleClick(actionStartActivity(homeIntent)),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val ringSz = (minOf(hDp - 16f, 50f)).toInt().coerceIn(38, 50)
+                        Image(
+                            provider = ImageProvider(WidgetArt.ringBitmap(context, cfg, done, total, sizeDp = ringSz)),
+                            contentDescription = "Progress",
+                            modifier = GlanceModifier.size(ringSz.dp)
+                        )
+                        Spacer(GlanceModifier.width(10.dp))
+                        Column(GlanceModifier.defaultWeight()) {
+                            Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "TODAY",
+                                    style = TextStyle(color = cfg.mutedColor(context), fontSize = (9.5f * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff),
+                                    modifier = GlanceModifier.defaultWeight()
+                                )
+                                Text(
+                                    "🔥 ${streak}d",
+                                    style = TextStyle(color = cfg.accentColor(), fontSize = (10.5f * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff)
+                                )
+                            }
                             Text(
-                                "TODAY",
-                                style = TextStyle(color = cfg.mutedColor(context), fontSize = (10 * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff),
-                                modifier = GlanceModifier.defaultWeight()
+                                if (total == 0) "No tasks" else "$done/$total done",
+                                maxLines = 1,
+                                style = TextStyle(color = cfg.textColor(context), fontSize = (13.5f * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff)
                             )
-                            Text(
-                                "🔥 ${streak}d",
-                                style = TextStyle(color = cfg.accentColor(), fontSize = (11 * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff)
+                            Spacer(GlanceModifier.height(3.dp))
+                            Image(
+                                provider = ImageProvider(WidgetArt.progressBarBitmap(context, cfg, done, total)),
+                                contentDescription = null,
+                                contentScale = ContentScale.FillBounds,
+                                modifier = GlanceModifier.fillMaxWidth().height(4.dp)
                             )
                         }
-                        Text(
-                            if (total == 0) "No tasks today" else if (done == total) "All $total done ✨" else "$done of $total done",
-                            maxLines = 1,
-                            style = TextStyle(color = cfg.textColor(context), fontSize = (14.5f * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff)
-                        )
-                        Spacer(GlanceModifier.height(4.dp))
+                    }
+                } else {
+                    // 3×1 (default) to 5×1 spacious horizontal banner layout
+                    Row(
+                        GlanceModifier.fillMaxSize().noRippleClick(actionStartActivity(homeIntent)),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val ringSz = (minOf(hDp - 14f, 56f)).toInt().coerceIn(44, 56)
                         Image(
-                            provider = ImageProvider(WidgetArt.progressBarBitmap(context, cfg, done, total)),
-                            contentDescription = null,
-                            contentScale = ContentScale.FillBounds,
-                            modifier = GlanceModifier.fillMaxWidth().height(5.dp)
+                            provider = ImageProvider(WidgetArt.ringBitmap(context, cfg, done, total, sizeDp = ringSz)),
+                            contentDescription = "Progress",
+                            modifier = GlanceModifier.size(ringSz.dp)
                         )
+                        Spacer(GlanceModifier.width(14.dp))
+                        Column(GlanceModifier.defaultWeight()) {
+                            Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "TODAY'S PROGRESS",
+                                    maxLines = 1,
+                                    style = TextStyle(color = cfg.mutedColor(context), fontSize = (10 * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff),
+                                    modifier = GlanceModifier.defaultWeight()
+                                )
+                                Text(
+                                    if (wDp >= 260f) "🔥 $streak day streak" else "🔥 ${streak}d",
+                                    maxLines = 1,
+                                    style = TextStyle(color = cfg.accentColor(), fontSize = (11.5f * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff)
+                                )
+                            }
+                            Text(
+                                when {
+                                    total == 0 -> "No tasks planned today"
+                                    done == total -> "All $total tasks done ✨"
+                                    else -> "$done of $total tasks done"
+                                },
+                                maxLines = 1,
+                                style = TextStyle(color = cfg.textColor(context), fontSize = (15 * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff)
+                            )
+                            Spacer(GlanceModifier.height(5.dp))
+                            Image(
+                                provider = ImageProvider(WidgetArt.progressBarBitmap(context, cfg, done, total)),
+                                contentDescription = null,
+                                contentScale = ContentScale.FillBounds,
+                                modifier = GlanceModifier.fillMaxWidth().height(5.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -442,10 +554,8 @@ class StickyWidget : GlanceAppWidget() {
         val initNotes = repo.dao.allNotes()
         provideContent {
             val tick = currentState(tickPrefKey)
-            val prefTick by WidgetPrefs.version.collectAsState()
             val notes by repo.notes.collectAsState(initial = initNotes)
             val cfg = WidgetPrefs.load(context, wid, WidgetKind.STICKY)
-            // "Latest note (auto)" (-1L) automatically skips hidden/blurred notes (#1)
             val visibleNotes = notes.filter { !it.hidden }
             val note = if (cfg.noteId != -1L) {
                 notes.find { it.id == cfg.noteId } ?: visibleNotes.maxByOrNull { it.updatedAt }
@@ -464,7 +574,7 @@ class StickyWidget : GlanceAppWidget() {
                 appIntent(context, MainActivity.ACTION_NEW_NOTE, wid = wid)
             }
 
-            CardShell(context, cfg, noteColor = colorIdx, isSticky = true, onClick = clickIntent) {
+            CardShell(context, cfg, fallbackW = 160f, fallbackH = 160f, noteColor = colorIdx, isSticky = true, onClick = clickIntent) {
                 if (note == null) {
                     Box(
                         GlanceModifier.fillMaxSize().noRippleClick(actionStartActivity(clickIntent)),
@@ -473,7 +583,6 @@ class StickyWidget : GlanceAppWidget() {
                         Text("Tap to write a note 📝", style = TextStyle(color = fg, fontSize = (14 * sc).sp, fontFamily = ff))
                     }
                 } else if (note.hidden) {
-                    // Specifically pinned note was marked hidden/blurred in the app (#1)
                     Box(
                         GlanceModifier.fillMaxSize().noRippleClick(actionStartActivity(clickIntent)),
                         contentAlignment = Alignment.Center
@@ -489,10 +598,10 @@ class StickyWidget : GlanceAppWidget() {
                         Text(
                             note.title,
                             maxLines = 2,
-                            style = TextStyle(color = fg, fontSize = (16 * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff),
+                            style = TextStyle(color = fg, fontSize = (15.5f * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff),
                             modifier = GlanceModifier.fillMaxWidth().noRippleClick(actionStartActivity(clickIntent))
                         )
-                        Spacer(GlanceModifier.height(6.dp))
+                        Spacer(GlanceModifier.height(5.dp))
                     }
                     if (note.isChecklist) {
                         val checkItems = parseChecklist(note.content)
@@ -528,7 +637,6 @@ class StickyWidget : GlanceAppWidget() {
                                     )
                                 }
                             }
-                            // Clickable empty space below checklist items opens the note in NoteEditor (#7)
                             item(itemId = -999L) {
                                 Box(
                                     GlanceModifier
@@ -541,7 +649,7 @@ class StickyWidget : GlanceAppWidget() {
                     } else {
                         Text(
                             note.content,
-                            maxLines = 10,
+                            maxLines = 12,
                             style = TextStyle(color = fgMuted, fontSize = (13 * sc).sp, fontFamily = ff),
                             modifier = GlanceModifier.fillMaxSize().noRippleClick(actionStartActivity(clickIntent))
                         )
@@ -552,7 +660,7 @@ class StickyWidget : GlanceAppWidget() {
     }
 }
 
-// ---------- 4. Calendar (Week + Tasks) Widget (#10) ----------
+// ---------- 4. Calendar (Week + Tasks) Widget (#5, #10) ----------
 class CalendarWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Exact
     override suspend fun provideGlance(context: Context, id: GlanceId) {
@@ -561,12 +669,14 @@ class CalendarWidget : GlanceAppWidget() {
         val initTasks = repo.dao.allTasks()
         provideContent {
             val tick = currentState(tickPrefKey)
-            val prefTick by WidgetPrefs.version.collectAsState()
+            val stateDay = currentState(selectedDayPrefKey)
             val all by repo.tasks.collectAsState(initial = initTasks)
             val cfg = WidgetPrefs.load(context, wid, WidgetKind.CALENDAR)
             val today = LocalDate.now()
-            val selectedDay = WidgetPrefs.getSelectedDay(context, wid)
             val start = today.minusDays((today.dayOfWeek.value - 1).toLong())
+            val end = start.plusDays(6)
+            val selectedDay = stateDay?.let { LocalDate.ofEpochDay(it) }?.takeIf { !it.isBefore(start) && !it.isAfter(end) }
+                ?: WidgetPrefs.getSelectedDay(context, wid)
             val week = (0..6).map { start.plusDays(it.toLong()) }
             val dayTasks = all.filter {
                 it.task.dueDate == selectedDay.toEpochDay() && (cfg.showCompleted || !it.task.completed)
@@ -591,10 +701,11 @@ class CalendarWidget : GlanceAppWidget() {
                 Dates.short(selectedDay)
             }
 
-            CardShell(context, cfg, onClick = openCalIntent) {
+            CardShell(context, cfg, fallbackW = 280f, fallbackH = 160f, onClick = openCalIntent) {
                 Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         headerTitle,
+                        maxLines = 1,
                         style = TextStyle(color = cfg.textColor(context), fontSize = (15 * sc).sp, fontWeight = FontWeight.Bold, fontFamily = ff),
                         modifier = GlanceModifier.defaultWeight().noRippleClick(actionStartActivity(openCalIntent))
                     )
@@ -695,7 +806,6 @@ class CalendarWidget : GlanceAppWidget() {
                                 if (t.dueTime != null) Text(Dates.time(t.dueTime), style = TextStyle(color = cfg.mutedColor(context), fontSize = (11 * sc).sp, fontFamily = ff))
                             }
                         }
-                        // Clickable empty space below items opens Calendar on the selected date (#7)
                         item(itemId = -999L) {
                             Box(
                                 GlanceModifier
@@ -718,8 +828,9 @@ class QuickWidget : GlanceAppWidget() {
         val wid = GlanceAppWidgetManager(context).getAppWidgetId(id)
         provideContent {
             val tick = currentState(tickPrefKey)
-            val prefTick by WidgetPrefs.version.collectAsState()
             val cfg = WidgetPrefs.load(context, wid, WidgetKind.QUICK)
+            val liveSize = LocalSize.current
+            val side = minOf(liveSize.width.value, liveSize.height.value).takeIf { it > 20f }?.toInt()?.coerceIn(48, 84) ?: 64
             val action = if (cfg.quickAction == 1) MainActivity.ACTION_NEW_NOTE else MainActivity.ACTION_NEW_TASK
             val targetIntent = appIntent(context, action, id = cfg.quickAction.toLong(), wid = wid)
             Box(
@@ -727,9 +838,9 @@ class QuickWidget : GlanceAppWidget() {
                 contentAlignment = Alignment.Center
             ) {
                 Image(
-                    provider = ImageProvider(WidgetArt.quickAddBitmap(context, cfg, 68)),
+                    provider = ImageProvider(WidgetArt.quickAddBitmap(context, cfg, side)),
                     contentDescription = if (cfg.quickAction == 1) "New Note" else "New Task",
-                    modifier = GlanceModifier.size(64.dp).noRippleClick(actionStartActivity(targetIntent))
+                    modifier = GlanceModifier.size(side.dp).noRippleClick(actionStartActivity(targetIntent))
                 )
             }
         }

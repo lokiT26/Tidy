@@ -208,7 +208,9 @@ fun NotesScreen(
     }
 
     val queryFiltered = remember(notes, query) {
-        if (query.isBlank()) notes else notes.filter { it.title.contains(query, true) || it.content.contains(query, true) }
+        if (query.isBlank()) notes else notes.filter {
+            it.title.contains(query, true) || (!it.hidden && it.content.contains(query, true))
+        }
     }
     // Pinned notes are untouched by the Others filter/sort (staying fixed at top in manual order)
     val computedPinned = remember(queryFiltered) { queryFiltered.filter { it.pinned } }
@@ -559,6 +561,12 @@ fun NoteCard(
         else -> 10
     }
 
+    val checklistItems = remember(n.content, n.isChecklist) {
+        if (n.isChecklist) parseChecklist(n.content) else emptyList()
+    }
+    val extraChecklistCount = (checklistItems.size - maxChecklistLines).coerceAtLeast(0)
+    val cardPad = if (sizeMode == 1) 13.dp else 16.dp
+
     Box(
         modifier
             .fillMaxWidth()
@@ -575,58 +583,84 @@ fun NoteCard(
                 .fillMaxWidth()
                 .then(if (sizeMode != 0) Modifier.fillMaxHeight() else Modifier)
                 .realNoteBlur(enabled = n.hidden, cardBg = bg, fg = fg, isDark = t.dark)
-                .padding(16.dp)
+                .padding(cardPad)
         ) {
-            Row(verticalAlignment = Alignment.Top) {
-                if (n.title.isNotBlank()) {
-                    Text(
-                        n.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = fg,
-                        maxLines = if (sizeMode == 1) 1 else 3,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f).padding(end = if (onPinClick != null) 24.dp else 0.dp)
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f).height(4.dp))
-                }
-            }
-            if (n.isChecklist) {
-                val items = parseChecklist(n.content)
-                if (n.title.isNotBlank() && items.isNotEmpty()) Spacer(Modifier.height(6.dp))
-                items.take(maxChecklistLines).forEach {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
-                        Icon(if (it.done) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, null, tint = fg.copy(alpha = 0.55f), modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .then(if (sizeMode != 0) Modifier.weight(1f).clip(RoundedCornerShape(4.dp)) else Modifier)
+            ) {
+                Row(verticalAlignment = Alignment.Top) {
+                    if (n.title.isNotBlank()) {
                         Text(
-                            it.text.replace("\n", " · "),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = fg.copy(alpha = if (it.done) 0.45f else 0.8f),
-                            maxLines = 1,
+                            n.title,
+                            style = if (sizeMode == 1) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
+                            color = fg,
+                            maxLines = if (sizeMode == 1) 1 else 3,
                             overflow = TextOverflow.Ellipsis,
-                            textDecoration = if (it.done) TextDecoration.LineThrough else null
+                            modifier = Modifier.weight(1f).padding(end = if (onPinClick != null) 24.dp else 0.dp)
                         )
+                    } else {
+                        Spacer(Modifier.weight(1f).height(2.dp))
                     }
                 }
-                if (items.size > maxChecklistLines) {
-                    Text("+${items.size - maxChecklistLines} more", style = MaterialTheme.typography.labelSmall, color = fg.copy(alpha = 0.5f))
+                if (n.isChecklist) {
+                    if (n.title.isNotBlank() && checklistItems.isNotEmpty()) {
+                        Spacer(Modifier.height(if (sizeMode == 1) 3.dp else 6.dp))
+                    }
+                    checklistItems.take(maxChecklistLines).forEach {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = if (sizeMode == 1) 1.dp else 2.dp)
+                        ) {
+                            Icon(
+                                if (it.done) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank,
+                                null,
+                                tint = fg.copy(alpha = 0.55f),
+                                modifier = Modifier.size(if (sizeMode == 1) 14.5.dp else 16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                it.text.replace("\n", " · "),
+                                style = if (sizeMode == 1) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+                                color = fg.copy(alpha = if (it.done) 0.45f else 0.8f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textDecoration = if (it.done) TextDecoration.LineThrough else null
+                            )
+                        }
+                    }
+                } else if (n.content.isNotBlank()) {
+                    if (n.title.isNotBlank()) Spacer(Modifier.height(if (sizeMode == 1) 3.dp else 6.dp))
+                    Text(
+                        n.content,
+                        style = if (sizeMode == 1) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+                        color = fg.copy(alpha = 0.75f),
+                        maxLines = maxBodyLines,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-            } else if (n.content.isNotBlank()) {
-                if (n.title.isNotBlank()) Spacer(Modifier.height(6.dp))
-                Text(
-                    n.content,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = fg.copy(alpha = 0.75f),
-                    maxLines = maxBodyLines,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
-            if (sizeMode != 0) Spacer(Modifier.weight(1f)) else Spacer(Modifier.height(10.dp))
-            Text(
-                SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(n.updatedAt)),
-                style = MaterialTheme.typography.labelSmall,
-                color = fg.copy(alpha = 0.4f)
-            )
+            Spacer(Modifier.height(if (sizeMode == 1) 4.dp else 8.dp))
+            // Locked footer row: Date on left, '+n more' inline on right so date is never clipped (#2)
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(n.updatedAt)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = fg.copy(alpha = 0.42f)
+                )
+                if (n.isChecklist && extraChecklistCount > 0) {
+                    Text(
+                        "+$extraChecklistCount more",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = fg.copy(alpha = 0.55f)
+                    )
+                }
+            }
         }
 
         // Subtle frosted eye-off badge centered over blurred notes
