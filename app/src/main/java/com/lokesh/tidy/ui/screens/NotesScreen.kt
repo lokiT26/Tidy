@@ -70,7 +70,12 @@ fun parseChecklist(content: String): List<CheckItem> {
     val lines = content.replace(IN_ITEM_NL, "\n").lines()
     val hasMarkers = lines.any { it.startsWith("[x] ") || it.startsWith("[ ] ") }
     if (!hasMarkers) {
-        return content.split("\n").map { it.replace("\u200B", "") }.filter { it.isNotEmpty() }.map { CheckItem(false, it) }
+        return content
+            .replace(IN_ITEM_NL, "\u0000")
+            .split("\n")
+            .map { it.replace("\u0000", "\n").replace("\u200B", "").trim() }
+            .filter { it.isNotEmpty() }
+            .map { CheckItem(false, it) }
     }
     val result = mutableListOf<CheckItem>()
     for (raw in lines) {

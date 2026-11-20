@@ -217,8 +217,7 @@ class Repository private constructor(private val context: Context) {
             instance ?: Repository(context.applicationContext).also { instance = it }
         }
 
-        fun nextOccurrence(from: LocalDate, repeat: String): LocalDate {
-            val today = LocalDate.now()
+        fun nextOccurrence(from: LocalDate, repeat: String, today: LocalDate = LocalDate.now()): LocalDate {
             var d = from
             do {
                 d = when (repeat) {
@@ -233,13 +232,12 @@ class Repository private constructor(private val context: Context) {
             return d
         }
 
-        fun streaks(tasks: List<Task>): Pair<Int, Int> {
-            val zone = ZoneId.systemDefault()
+        fun streaks(tasks: List<Task>, todayDate: LocalDate = LocalDate.now(), zone: ZoneId = ZoneId.systemDefault()): Pair<Int, Int> {
             val days = tasks.mapNotNull { it.completedAt }.map { java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate().toEpochDay() }.toSortedSet()
             if (days.isEmpty()) return 0 to 0
             var best = 1; var run = 1; var prev: Long? = null
             for (d in days) { if (prev != null) { run = if (d == prev + 1) run + 1 else 1; best = maxOf(best, run) }; prev = d }
-            val today = LocalDate.now().toEpochDay()
+            val today = todayDate.toEpochDay()
             var cur = 0
             var d = if (days.contains(today)) today else today - 1
             while (days.contains(d)) { cur++; d-- }

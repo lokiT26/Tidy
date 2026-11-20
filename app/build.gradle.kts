@@ -58,4 +58,6 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.glance:glance-appwidget:1.1.1")
     implementation("sh.calvin.reorderable:reorderable:2.4.3")
+
+    testImplementation("junit:junit:4.13.2")
 }
