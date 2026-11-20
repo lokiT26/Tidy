@@ -220,8 +220,8 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
             Item(Icons.Rounded.CloudDownload, "Restore backup", "Replaces current data") { importLauncher.launch(arrayOf("application/json", "*/*")) }
         }
 
-        val pkgVersion = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "1.2" }
-        Text("Tidy $pkgVersion · made for Lokesh · 100% offline", style = MaterialTheme.typography.labelSmall, color = t.textFaint, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        val pkgVersion = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "1.6" }
+        Text("Tidy $pkgVersion · 100% offline", style = MaterialTheme.typography.labelSmall, color = t.textFaint, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
     }
 }
 
