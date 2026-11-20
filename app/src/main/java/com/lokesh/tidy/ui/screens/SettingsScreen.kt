@@ -6,7 +6,11 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
 import android.widget.Toast
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -37,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.lokesh.tidy.data.AppSettings
 import com.lokesh.tidy.data.Category
+import com.lokesh.tidy.reminder.Reminders
 import com.lokesh.tidy.ui.AppViewModel
 import com.lokesh.tidy.ui.components.IconBubble
 import com.lokesh.tidy.ui.theme.Palette
@@ -176,8 +181,35 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
         }
 
         Group("Notifications") {
+            val lifecycleOwner = LocalLifecycleOwner.current
+            var batteryUnrestricted by remember {
+                mutableStateOf(ctx.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(ctx.packageName) ?: true)
+            }
+            DisposableEffect(lifecycleOwner) {
+                val obs = LifecycleEventObserver { _, ev ->
+                    if (ev == Lifecycle.Event.ON_RESUME) {
+                        batteryUnrestricted = ctx.getSystemService(PowerManager::class.java)?.isIgnoringBatteryOptimizations(ctx.packageName) ?: true
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(obs)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+            }
+
             if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
                 Item(Icons.Rounded.NotificationsActive, "Allow notifications", "Needed for reminders") { notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
+            if (!batteryUnrestricted) {
+                Item(Icons.Rounded.BatteryChargingFull, "Unrestricted background", "Recommended so Samsung doesn't delay reminders") {
+                    runCatching {
+                        ctx.startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    }.onFailure {
+                        ctx.startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${ctx.packageName}")))
+                    }
+                }
+            }
+            Item(Icons.Rounded.NotificationAdd, "Send test reminder (5s)", "Lock your phone to verify alerts fire on time") {
+                Reminders.scheduleTest(ctx)
+                Toast.makeText(ctx, "Test reminder scheduled in 5 seconds", Toast.LENGTH_SHORT).show()
+            }
             Item(Icons.Rounded.Settings, "Notification settings", "Sound, vibration, pop-up style") {
                 ctx.startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName))
             }

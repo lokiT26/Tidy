@@ -26,6 +26,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
@@ -139,44 +140,75 @@ private fun gaussianBoxBlur(bmp: Bitmap, radius: Int = 3) {
     bmp.setPixels(pixels, 0, w, 0, 0, w, h)
 }
 
+private class BlurCacheHolder(var key: Any? = null, var w: Int = 0, var h: Int = 0, var bmp: Bitmap? = null) {
+    fun clear() {
+        bmp?.let { if (!it.isRecycled) it.recycle() }
+        bmp = null
+        w = 0
+        h = 0
+        key = null
+    }
+}
+
 /**
  * Renders the exact laid-out note content into a downscaled offscreen bitmap and applies a real
- * 3-pass Gaussian blur + frosted pastel wash so the box size never changes by even 1 pixel.
+ * 3-pass Gaussian blur + frosted pastel wash once per note/size/theme change, caching the bitmap
+ * so scrolling and animations draw with zero per-frame allocations.
  */
-fun Modifier.realNoteBlur(enabled: Boolean, cardBg: Color, fg: Color, isDark: Boolean): Modifier {
+fun Modifier.realNoteBlur(enabled: Boolean, cardBg: Color, fg: Color, isDark: Boolean, cacheKey: Any = Unit): Modifier {
     if (!enabled) return this
-    return this.drawWithContent {
-        val w = size.width.roundToInt()
-        val h = size.height.roundToInt()
-        if (w <= 4 || h <= 4) return@drawWithContent
-
-        val scale = 6
-        val bw = max(6, w / scale)
-        val bh = max(6, h / scale)
-        val bmp = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
-        val nativeCanvas = android.graphics.Canvas(bmp)
-        nativeCanvas.drawColor(cardBg.toArgb())
-
-        val composeCanvas = Canvas(nativeCanvas)
-        composeCanvas.save()
-        composeCanvas.scale(bw / size.width, bh / size.height)
-        draw(this, layoutDirection, composeCanvas, size) {
-            this@drawWithContent.drawContent()
+    return this.composed {
+        val holder = remember { BlurCacheHolder() }
+        DisposableEffect(Unit) {
+            onDispose { holder.clear() }
         }
-        composeCanvas.restore()
+        val paint = remember {
+            android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG)
+        }
+        this.drawWithContent {
+            val w = size.width.roundToInt()
+            val h = size.height.roundToInt()
+            if (w <= 4 || h <= 4) return@drawWithContent
 
-        gaussianBoxBlur(bmp, radius = 3)
+            val scale = 6
+            val bw = max(6, w / scale)
+            val bh = max(6, h / scale)
+            val existing = holder.bmp
+            val valid = existing != null && !existing.isRecycled && holder.w == bw && holder.h == bh && holder.key == cacheKey
 
-        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG or android.graphics.Paint.FILTER_BITMAP_FLAG)
-        val dst = android.graphics.RectF(0f, 0f, size.width, size.height)
-        drawContext.canvas.nativeCanvas.drawBitmap(bmp, null, dst, paint)
-        bmp.recycle()
+            val bmp = if (valid) {
+                existing!!
+            } else {
+                holder.clear()
+                Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888).also { fresh ->
+                    val nativeCanvas = android.graphics.Canvas(fresh)
+                    nativeCanvas.drawColor(cardBg.toArgb())
 
-        // Frosted pastel veil so the note's colour remains distinct while text is completely unreadable
-        drawRoundRect(
-            color = cardBg.copy(alpha = if (isDark) 0.34f else 0.30f),
-            cornerRadius = CornerRadius(14.dp.toPx())
-        )
+                    val composeCanvas = Canvas(nativeCanvas)
+                    composeCanvas.save()
+                    composeCanvas.scale(bw / size.width, bh / size.height)
+                    draw(this, layoutDirection, composeCanvas, size) {
+                        this@drawWithContent.drawContent()
+                    }
+                    composeCanvas.restore()
+
+                    gaussianBoxBlur(fresh, radius = 3)
+                    holder.bmp = fresh
+                    holder.w = bw
+                    holder.h = bh
+                    holder.key = cacheKey
+                }
+            }
+
+            val dst = android.graphics.RectF(0f, 0f, size.width, size.height)
+            drawContext.canvas.nativeCanvas.drawBitmap(bmp, null, dst, paint)
+
+            // Frosted pastel veil so the note's colour remains distinct while text is completely unreadable
+            drawRoundRect(
+                color = cardBg.copy(alpha = if (isDark) 0.34f else 0.30f),
+                cornerRadius = CornerRadius(14.dp.toPx())
+            )
+        }
     }
 }
 
@@ -577,12 +609,18 @@ fun NoteCard(
             .then(if (n.colorIndex == 0) Modifier.border(1.dp, t.divider, RoundedCornerShape(24.dp)) else Modifier)
             .bouncyClick(onClick = onClick, onDoubleClick = onPinClick)
     ) {
-        // Content layer (measured identically whether hidden or visible; real Gaussian blur applied when n.hidden)
+        // Content layer (measured identically whether hidden or visible; cached Gaussian blur applied when n.hidden)
         Column(
             Modifier
                 .fillMaxWidth()
                 .then(if (sizeMode != 0) Modifier.fillMaxHeight() else Modifier)
-                .realNoteBlur(enabled = n.hidden, cardBg = bg, fg = fg, isDark = t.dark)
+                .realNoteBlur(
+                    enabled = n.hidden,
+                    cardBg = bg,
+                    fg = fg,
+                    isDark = t.dark,
+                    cacheKey = listOf(n.id, n.updatedAt, n.title, n.content, n.colorIndex, n.isChecklist, sizeMode, t.dark)
+                )
                 .padding(cardPad)
         ) {
             Column(

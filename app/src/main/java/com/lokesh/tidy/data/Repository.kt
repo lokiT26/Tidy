@@ -6,7 +6,9 @@ import com.lokesh.tidy.reminder.Reminders
 import com.lokesh.tidy.widget.WidgetUpdater
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -17,18 +19,22 @@ import java.time.ZoneId
 class Repository private constructor(private val context: Context) {
     val db: TidyDatabase = Room.databaseBuilder(context, TidyDatabase::class.java, "tidy.db")
         .addMigrations(TidyDatabase.MIGRATION_1_2, TidyDatabase.MIGRATION_2_3)
-        .fallbackToDestructiveMigration()
         .build()
     val dao = db.dao()
     val settings = SettingsStore(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var widgetSyncJob: Job? = null
 
     val tasks = dao.observeTasks()
     val categories = dao.observeCategories()
     val notes = dao.observeNotes()
 
     private fun changed() {
-        scope.launch { WidgetUpdater.updateAll(context) }
+        widgetSyncJob?.cancel()
+        widgetSyncJob = scope.launch {
+            delay(150)
+            WidgetUpdater.updateAll(context)
+        }
     }
 
     // ---------- Tasks ----------

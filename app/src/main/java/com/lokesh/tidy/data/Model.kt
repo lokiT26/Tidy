@@ -127,7 +127,7 @@ interface TidyDao {
     @Insert suspend fun insertCategoriesRaw(c: List<Category>)
 }
 
-@Database(entities = [Category::class, Task::class, Subtask::class, Note::class], version = 3, exportSchema = false)
+@Database(entities = [Category::class, Task::class, Subtask::class, Note::class], version = 3, exportSchema = true)
 abstract class TidyDatabase : RoomDatabase() {
     abstract fun dao(): TidyDao
 

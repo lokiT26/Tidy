@@ -29,6 +29,7 @@ object Reminders {
     const val ACTION_DONE = "com.lokesh.tidy.DONE"
     const val ACTION_SNOOZE = "com.lokesh.tidy.SNOOZE"
     const val ACTION_MIDNIGHT = "com.lokesh.tidy.MIDNIGHT"
+    const val ACTION_TEST = "com.lokesh.tidy.TEST_REMIND"
 
     fun dueTimeMillis(t: Task): Long? {
         val date = t.dueDate ?: return null
@@ -102,6 +103,19 @@ object Reminders {
         }
     }
 
+    fun scheduleTest(context: Context, delayMs: Long = 5_000L) {
+        ensureChannel(context)
+        val am = context.getSystemService(AlarmManager::class.java)
+        val i = Intent(context, ReminderReceiver::class.java)
+            .setAction(ACTION_TEST)
+            .addFlags(Intent.FLAG_RECEIVER_FOREGROUND)
+        val pi = PendingIntent.getBroadcast(context, -99, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val at = System.currentTimeMillis() + delayMs
+        val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()
+        if (canExact) am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+        else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+    }
+
     fun show(context: Context, t: Task) {
         ensureChannel(context)
         val open = PendingIntent.getActivity(context, t.id.toInt(), Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -135,6 +149,10 @@ class ReminderReceiver : BroadcastReceiver() {
                     Reminders.ACTION_DONE -> { NotificationManagerCompat.from(context).cancel(id.toInt()); repo.setCompleted(id, true) }
                     Reminders.ACTION_SNOOZE -> { NotificationManagerCompat.from(context).cancel(id.toInt()); repo.snooze(id, 10) }
                     Reminders.ACTION_MIDNIGHT -> { WidgetUpdater.updateAll(context); Reminders.scheduleMidnight(context) }
+                    Reminders.ACTION_TEST -> Reminders.show(
+                        context,
+                        Task(id = 999999L, title = "Tidy reminder works ✨", notes = "Alarms are firing properly on your device.")
+                    )
                 }
             } finally { pending.finish() }
         }
