@@ -1,6 +1,74 @@
 # Tidy — Minimal To-Dos, Notes & Widgets for Android
 
-**Tidy** is a fast, 100% offline Android To-Do and Notes app built with **Kotlin**, **Jetpack Compose**, **Room**, and **Jetpack Glance**.
+[![Latest Release](https://img.shields.io/github/v/release/lokiT26/Tidy?label=Download%20APK&color=7c6af6)](https://github.com/lokiT26/Tidy/releases/latest)
+[![GitHub Stars](https://img.shields.io/github/stars/lokiT26/Tidy?style=flat&color=f59e0b)](https://github.com/lokiT26/Tidy/stargazers)
+[![License: MIT](https://img.shields.io/github/license/lokiT26/Tidy?color=34d399)](LICENSE)
+![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white)
+![100% Offline](https://img.shields.io/badge/Offline-100%25%20Private-6366f1)
+
+**Tidy** is a fast, 100% offline Android To-Do and Notes app built with **Kotlin**, **Jetpack Compose**, **Room**, and **Jetpack Glance**. Zero ads, zero accounts, zero internet permission.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/today-light.png" width="235" alt="Today screen in Light mode" /><br />
+      <sub><b>Today</b> — Progress ring, streaks &amp; sections</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/calendar-dark.png" width="235" alt="Calendar timeline in Dark mode" /><br />
+      <sub><b>Calendar (Dark)</b> — Week/month &amp; timeline</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/notes-light.png" width="235" alt="Notes grid with blurred hidden note" /><br />
+      <sub><b>Notes</b> — Masonry grid, checklists &amp; blur</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/insights-light.png" width="235" alt="Insights dashboard and heatmap" /><br />
+      <sub><b>Insights</b> — Streaks &amp; 18-week heatmap</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/widgets-home.png" width="235" alt="Tidy home-screen widgets" /><br />
+      <sub><b>Home Widgets</b> — Frosted live widgets</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/screenshots/widget-customiser.png" width="235" alt="Widget customiser live preview" /><br />
+      <sub><b>Widget Customiser</b> — Live style editor</sub>
+    </td>
+  </tr>
+</table>
+
+<details>
+<summary>More screenshots (Dark Mode, Settings, Backup &amp; Widget Controls)</summary>
+<br />
+<table>
+  <tr>
+    <td align="center" width="25%">
+      <img src="docs/screenshots/today-dark.png" width="185" alt="Today screen in Dark mode" /><br />
+      <sub><b>Today (Dark)</b></sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="docs/screenshots/settings-appearance.png" width="185" alt="Appearance settings" /><br />
+      <sub><b>Themes &amp; Accents</b></sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="docs/screenshots/settings-backup.png" width="185" alt="Notifications and JSON backup settings" /><br />
+      <sub><b>Offline Backup</b></sub>
+    </td>
+    <td align="center" width="25%">
+      <img src="docs/screenshots/widget-customiser-controls.png" width="185" alt="Widget accent and font controls" /><br />
+      <sub><b>Fonts &amp; Colours</b></sub>
+    </td>
+  </tr>
+</table>
+</details>
+
+## Download
+
+Grab the latest signed APK from [**GitHub Releases**](https://github.com/lokiT26/Tidy/releases/latest) (supports in-place upgrades and [Obtainium](https://obtainium.imranr.dev/)).
 
 ## Features
 
@@ -28,3 +96,7 @@ keyPassword=your-key-password
 ```
 
 Without `keystore.properties`, `assembleRelease` falls back to the local Android debug keystore.
+
+---
+
+> ⭐ **Enjoying Tidy?** If it helps keep your day a little calmer, consider starring the repo — it helps others discover it!
