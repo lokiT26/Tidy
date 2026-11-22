@@ -1,10 +1,14 @@
 package com.lokesh.tidy
 
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import com.lokesh.tidy.data.Repository
 import com.lokesh.tidy.data.Task
 import com.lokesh.tidy.reminder.Reminders
 import com.lokesh.tidy.ui.Dates
 import com.lokesh.tidy.ui.screens.CheckItem
+import com.lokesh.tidy.ui.screens.applyChecklistValueChange
+import com.lokesh.tidy.ui.screens.makeEditableCheckItem
 import com.lokesh.tidy.ui.screens.parseChecklist
 import com.lokesh.tidy.ui.screens.serializeChecklist
 import org.junit.Assert.*
@@ -159,8 +163,49 @@ class TidyLogicTest {
         assertEquals("2 hr before", Dates.reminderLabel(120))
         assertEquals("1 day before", Dates.reminderLabel(1440))
         assertEquals("3 days before", Dates.reminderLabel(4320))
+        assertEquals("1h 30m before", Dates.reminderLabel(90))
+        assertEquals("1d 2h 15m before", Dates.reminderLabel(1440 + 120 + 15))
         assertEquals("9:05 AM", Dates.time(9 * 60 + 5))
         assertEquals("12:00 PM", Dates.time(12 * 60))
         assertEquals("12:30 AM", Dates.time(30))
+    }
+
+    @Test
+    fun checklist_backspaceOnEmptyItemMovesCursorToEndOfPreviousItem() {
+        var nextId = 10L
+        val items = mutableListOf(
+            makeEditableCheckItem(1L, false, "First item"),
+            makeEditableCheckItem(2L, false, "Second item"),
+            makeEditableCheckItem(3L, false, ""),
+        )
+        // Simulate Backspace in empty item 3 (sentinel deleted -> empty string)
+        val focusedUid = applyChecklistValueChange(items, 2, TextFieldValue("", TextRange(0))) { nextId++ }
+        assertEquals(2L, focusedUid)
+        assertEquals(2, items.size)
+        assertEquals("Second item", items[1].cleanText)
+        // Cursor must be at the very end of "Second item" (1 + length because of leading sentinel)
+        assertEquals(1 + "Second item".length, items[1].tfv.selection.start)
+    }
+
+    @Test
+    fun checklist_doubleEnterOnEmptyLineMovesToNewItemBelow() {
+        var nextId = 10L
+        val items = mutableListOf(
+            makeEditableCheckItem(1L, false, "Buy milk"),
+        )
+        // 1st Enter at end of "Buy milk" -> adds a newline within item 0
+        val afterFirstEnter = TextFieldValue("\u200BBuy milk\n", TextRange(1 + "Buy milk\n".length))
+        val focus1 = applyChecklistValueChange(items, 0, afterFirstEnter) { nextId++ }
+        assertNull(focus1)
+        assertEquals(1, items.size)
+        assertEquals("Buy milk\n", items[0].cleanText)
+
+        // 2nd Enter on that empty line -> strips trailing newline from item 0 and creates/focuses item 1
+        val afterSecondEnter = TextFieldValue("\u200BBuy milk\n\n", TextRange(1 + "Buy milk\n\n".length))
+        val focus2 = applyChecklistValueChange(items, 0, afterSecondEnter) { nextId++ }
+        assertEquals(10L, focus2)
+        assertEquals(2, items.size)
+        assertEquals("Buy milk", items[0].cleanText)
+        assertEquals("", items[1].cleanText)
     }
 }

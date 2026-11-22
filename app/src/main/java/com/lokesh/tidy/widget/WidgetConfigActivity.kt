@@ -3,7 +3,9 @@ package com.lokesh.tidy.widget
 import android.app.Activity
 import android.appwidget.AppWidgetManager
 import android.content.Intent
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,11 +22,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -47,6 +59,8 @@ import kotlin.math.roundToInt
 class WidgetConfigActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
+        window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER)
+        window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
         super.onCreate(savedInstanceState)
         val wid = intent?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID) ?: AppWidgetManager.INVALID_APPWIDGET_ID
         val reconfig = intent?.getBooleanExtra("reconfigure", false) == true
@@ -86,12 +100,41 @@ private fun ConfigScreen(
     // Hidden/blurred notes are excluded from the widget selector (#1)
     val visibleNotes = remember(notes) { notes.filter { !it.hidden } }
 
-    AmbientBackground {
+    var previewRect by remember { mutableStateOf(Rect.Zero) }
+    val previewCornerPx = with(LocalDensity.current) { 30.dp.toPx() }
+
+    Box(Modifier.fillMaxSize()) {
+        // Ambient background with a rounded cutout at previewRect so the real device home-screen wallpaper shines through
+        AmbientBackground(
+            modifier = Modifier.drawWithContent {
+                val r = previewRect
+                if (r != Rect.Zero) {
+                    val hole = Path().apply {
+                        addRoundRect(RoundRect(r, CornerRadius(previewCornerPx, previewCornerPx)))
+                    }
+                    clipPath(hole, ClipOp.Difference) {
+                        this@drawWithContent.drawContent()
+                    }
+                } else {
+                    drawContent()
+                }
+            }
+        ) {}
+
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            // Live preview on simulated wallpaper
+            // Live preview directly over the device's real home-screen wallpaper
             Box(
-                Modifier.fillMaxWidth().padding(18.dp).height(196.dp).clip(RoundedCornerShape(30.dp))
-                    .background(Brush.linearGradient(listOf(Color(0xFF9183F4), Color(0xFFFFB499), Color(0xFF8FD9C4)))),
+                Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp)
+                    .height(196.dp)
+                    .onGloballyPositioned { coords ->
+                        val pos = coords.positionInRoot()
+                        val sz = coords.size
+                        previewRect = Rect(pos.x, pos.y, pos.x + sz.width, pos.y + sz.height)
+                    }
+                    .clip(RoundedCornerShape(30.dp))
+                    .border(1.dp, t.divider, RoundedCornerShape(30.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 WidgetPreview(cfg, kind, visibleNotes, categories)

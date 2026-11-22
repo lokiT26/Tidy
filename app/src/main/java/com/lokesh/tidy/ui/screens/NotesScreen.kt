@@ -39,10 +39,15 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.draw
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,6 +69,114 @@ import kotlin.math.roundToInt
 data class CheckItem(val done: Boolean, val text: String)
 
 private const val IN_ITEM_NL = "\u200B\n"
+private const val ZWSP = "\u200B"
+
+data class EditableCheckItem(
+    val uid: Long,
+    val done: Boolean,
+    val tfv: TextFieldValue,
+) {
+    val cleanText: String get() = tfv.text.replace(ZWSP, "")
+}
+
+fun makeEditableCheckItem(
+    uid: Long,
+    done: Boolean,
+    text: String,
+    cursorInClean: Int = text.replace(ZWSP, "").length,
+): EditableCheckItem {
+    val clean = text.replace(ZWSP, "")
+    val clamped = cursorInClean.coerceIn(0, clean.length)
+    return EditableCheckItem(
+        uid = uid,
+        done = done,
+        tfv = TextFieldValue(
+            text = ZWSP + clean,
+            selection = TextRange(1 + clamped)
+        )
+    )
+}
+
+/**
+ * Pure state-transition helper for checklist editing:
+ * - If leading sentinel (\u200B) is removed (Backspace at start / on empty item), merges into item (index - 1)
+ *   and places cursor at the very end of the previous item's text.
+ * - If Enter (\n) is typed on an empty line inside item [index], strips that empty line and creates/focuses item (index + 1).
+ * Returns the UID of the item that should receive focus (or null if focus stays on the current item).
+ */
+fun applyChecklistValueChange(
+    items: MutableList<EditableCheckItem>,
+    index: Int,
+    newTfv: TextFieldValue,
+    allocateUid: () -> Long,
+): Long? {
+    if (index !in items.indices) return null
+    val item = items[index]
+
+    // 1. Backspace at start of item (sentinel deleted)
+    if (!newTfv.text.startsWith(ZWSP)) {
+        val remainder = newTfv.text.replace(ZWSP, "")
+        return if (index > 0) {
+            val prev = items[index - 1]
+            val prevClean = prev.cleanText
+            val merged = prevClean + remainder
+            items[index - 1] = makeEditableCheckItem(prev.uid, prev.done, merged, cursorInClean = prevClean.length)
+            items.removeAt(index)
+            prev.uid
+        } else {
+            items[0] = makeEditableCheckItem(item.uid, item.done, remainder, cursorInClean = 0)
+            null
+        }
+    }
+
+    // 2. Check if Enter (\n) was just typed on an already-empty line
+    val oldClean = item.cleanText
+    val newClean = newTfv.text.removePrefix(ZWSP).replace(ZWSP, "")
+    val newCleanCursor = (newTfv.selection.start - 1).coerceIn(0, newClean.length)
+    val justTypedNewline = newClean.length == oldClean.length + 1 &&
+        newCleanCursor > 0 &&
+        newClean[newCleanCursor - 1] == '\n' &&
+        newClean.removeRange(newCleanCursor - 1, newCleanCursor) == oldClean
+
+    if (justTypedNewline) {
+        val oldCursor = newCleanCursor - 1
+        val lineStart = oldClean.lastIndexOf('\n', (oldCursor - 1).coerceAtLeast(0)).let { if (it == -1) 0 else it + 1 }
+        val lineEnd = oldClean.indexOf('\n', oldCursor).let { if (it == -1) oldClean.length else it }
+        val currentLine = oldClean.substring(lineStart, lineEnd)
+
+        if (currentLine.isBlank()) {
+            val beforePart = if (lineStart > 0) oldClean.substring(0, lineStart - 1) else ""
+            val afterPart = if (lineEnd < oldClean.length) oldClean.substring(lineEnd + 1) else ""
+            items[index] = makeEditableCheckItem(item.uid, item.done, beforePart, cursorInClean = beforePart.length)
+
+            return if (beforePart.isEmpty() && afterPart.isEmpty() && index + 1 < items.size) {
+                val next = items[index + 1]
+                items[index + 1] = makeEditableCheckItem(next.uid, next.done, next.cleanText, cursorInClean = next.cleanText.length)
+                next.uid
+            } else {
+                val created = makeEditableCheckItem(allocateUid(), false, afterPart, cursorInClean = 0)
+                items.add(index + 1, created)
+                created.uid
+            }
+        }
+    }
+
+    // 3. Normal edit: preserve IME composition if sentinel is intact, clamping cursor to >= 1
+    val hasExtraSentinels = newTfv.text.substring(1).contains(ZWSP)
+    val updatedTfv = if (!hasExtraSentinels) {
+        val s = newTfv.selection.start.coerceAtLeast(1)
+        val e = newTfv.selection.end.coerceAtLeast(1)
+        if (s == newTfv.selection.start && e == newTfv.selection.end) newTfv
+        else newTfv.copy(selection = TextRange(s, e))
+    } else {
+        val clean = newTfv.text.replace(ZWSP, "")
+        val s = (newTfv.selection.start - 1).coerceIn(0, clean.length)
+        val e = (newTfv.selection.end - 1).coerceIn(0, clean.length)
+        TextFieldValue(text = ZWSP + clean, selection = TextRange(1 + s, 1 + e))
+    }
+    items[index] = item.copy(tfv = updatedTfv)
+    return null
+}
 
 fun parseChecklist(content: String): List<CheckItem> {
     if (content.isBlank()) return emptyList()
@@ -751,12 +864,38 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
     var pinned by remember { mutableStateOf(initial.pinned) }
     var hidden by remember { mutableStateOf(initial.hidden) }
     var checklist by remember { mutableStateOf(initial.isChecklist) }
-    val items = remember { mutableStateListOf<CheckItem>().apply { if (initial.isChecklist) addAll(parseChecklist(initial.content)) } }
+    var nextUid by remember { mutableLongStateOf(1L) }
+    fun allocUid(): Long = nextUid++
+    val items = remember {
+        mutableStateListOf<EditableCheckItem>().apply {
+            if (initial.isChecklist) {
+                val parsed = parseChecklist(initial.content)
+                if (parsed.isEmpty()) {
+                    add(makeEditableCheckItem(allocUid(), false, ""))
+                } else {
+                    parsed.forEach { add(makeEditableCheckItem(allocUid(), it.done, it.text)) }
+                }
+            }
+        }
+    }
+    val focusRequesters = remember { mutableStateMapOf<Long, FocusRequester>() }
+    var pendingFocusUid by remember { mutableStateOf<Long?>(null) }
     val savedDoneStates = remember { mutableMapOf<String, Boolean>() }
-    var newItem by remember { mutableStateOf("") }
+
+    LaunchedEffect(pendingFocusUid, items.size) {
+        val target = pendingFocusUid ?: return@LaunchedEffect
+        val requester = focusRequesters[target]
+        if (requester != null) {
+            runCatching { requester.requestFocus() }
+            pendingFocusUid = null
+        }
+    }
 
     fun currentContent() = if (checklist) {
-        serializeChecklist(items + listOfNotNull(newItem.takeIf { it.isNotBlank() }?.let { CheckItem(false, it) }))
+        serializeChecklist(
+            items.map { CheckItem(it.done, it.cleanText.trimEnd()) }
+                .filter { it.text.isNotBlank() }
+        )
     } else {
         content.replace("\u200B", "")
     }
@@ -804,15 +943,20 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
                             .split("\n")
                             .map { it.replace("\u0000", "\n").replace("\u200B", "").trim() }
                             .filter { it.isNotBlank() }
-                            .map { txt -> CheckItem(savedDoneStates[txt] ?: false, txt) }
+                            .map { txt -> makeEditableCheckItem(allocUid(), savedDoneStates[txt] ?: false, txt) }
                         items.clear()
-                        items.addAll(parsed)
+                        if (parsed.isEmpty()) {
+                            val first = makeEditableCheckItem(allocUid(), false, "")
+                            items.add(first)
+                            pendingFocusUid = first.uid
+                        } else {
+                            items.addAll(parsed)
+                        }
                     } else {
-                        val allItems = items + listOfNotNull(newItem.takeIf { it.isNotBlank() }?.let { CheckItem(false, it.trim()) })
-                        newItem = ""
+                        val allItems = items.map { CheckItem(it.done, it.cleanText.trim()) }.filter { it.text.isNotBlank() }
                         savedDoneStates.clear()
-                        allItems.forEach { savedDoneStates[it.text.replace("\u200B", "").trim()] = it.done }
-                        content = allItems.joinToString("\n") { it.text.replace("\u200B", "").replace("\n", IN_ITEM_NL) }
+                        allItems.forEach { savedDoneStates[it.text] = it.done }
+                        content = allItems.joinToString("\n") { it.text.replace("\n", IN_ITEM_NL) }
                     }
                     checklist = !checklist
                 }) { Icon(if (checklist) Icons.AutoMirrored.Rounded.Notes else Icons.Rounded.Checklist, "Checklist", tint = fg) }
@@ -848,23 +992,96 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
                         decorationBox = { inner -> if (content.isEmpty()) Text("Start writing…", style = MaterialTheme.typography.bodyLarge, color = fg.copy(alpha = 0.3f)); inner() })
                 } else {
                     items.forEachIndexed { i, it ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { items[i] = it.copy(done = !it.done) }, modifier = Modifier.size(36.dp)) {
-                                Icon(if (it.done) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, null, tint = if (it.done) t.accentStrong else fg.copy(alpha = 0.5f))
+                        key(it.uid) {
+                            val requester = remember(it.uid) {
+                                FocusRequester().also { r -> focusRequesters[it.uid] = r }
                             }
-                            BasicTextField(it.text, { v -> items[i] = it.copy(text = v) },
-                                textStyle = MaterialTheme.typography.bodyLarge.copy(color = fg.copy(alpha = if (it.done) 0.4f else 0.9f), textDecoration = if (it.done) TextDecoration.LineThrough else null),
-                                cursorBrush = SolidColor(t.accentStrong), modifier = Modifier.weight(1f))
-                            IconButton(onClick = { items.removeAt(i) }, modifier = Modifier.size(36.dp)) { Icon(Icons.Rounded.Close, null, tint = fg.copy(alpha = 0.35f), modifier = Modifier.size(18.dp)) }
+                            DisposableEffect(it.uid) {
+                                onDispose { focusRequesters.remove(it.uid) }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { items[i] = it.copy(done = !it.done) }, modifier = Modifier.size(36.dp)) {
+                                    Icon(if (it.done) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank, null, tint = if (it.done) t.accentStrong else fg.copy(alpha = 0.5f))
+                                }
+                                BasicTextField(
+                                    value = it.tfv,
+                                    onValueChange = { v ->
+                                        val targetUid = applyChecklistValueChange(items, i, v, ::allocUid)
+                                        if (targetUid != null) {
+                                            val immediate = focusRequesters[targetUid]
+                                            if (immediate != null) {
+                                                runCatching { immediate.requestFocus() }
+                                            } else {
+                                                pendingFocusUid = targetUid
+                                            }
+                                        }
+                                    },
+                                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                        color = fg.copy(alpha = if (it.done) 0.4f else 0.9f),
+                                        textDecoration = if (it.done) TextDecoration.LineThrough else null
+                                    ),
+                                    cursorBrush = SolidColor(t.accentStrong),
+                                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .focusRequester(requester)
+                                        .onPreviewKeyEvent { ev ->
+                                            if (ev.type == KeyEventType.KeyDown && ev.key == Key.Backspace &&
+                                                it.tfv.selection.collapsed && it.tfv.selection.start <= 1
+                                            ) {
+                                                val targetUid = applyChecklistValueChange(
+                                                    items,
+                                                    i,
+                                                    TextFieldValue(it.cleanText, TextRange(0)),
+                                                    ::allocUid
+                                                )
+                                                if (targetUid != null) {
+                                                    focusRequesters[targetUid]?.let { r -> runCatching { r.requestFocus() } }
+                                                        ?: run { pendingFocusUid = targetUid }
+                                                }
+                                                true
+                                            } else {
+                                                false
+                                            }
+                                        },
+                                    decorationBox = { inner ->
+                                        if (it.cleanText.isEmpty()) {
+                                            Text("List item", style = MaterialTheme.typography.bodyLarge, color = fg.copy(alpha = 0.3f))
+                                        }
+                                        inner()
+                                    }
+                                )
+                                IconButton(
+                                    onClick = {
+                                        if (items.size > 1) {
+                                            items.removeAt(i)
+                                        } else {
+                                            items[0] = makeEditableCheckItem(it.uid, false, "")
+                                        }
+                                    },
+                                    modifier = Modifier.size(36.dp)
+                                ) {
+                                    Icon(Icons.Rounded.Close, null, tint = fg.copy(alpha = 0.35f), modifier = Modifier.size(18.dp))
+                                }
+                            }
                         }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Add, null, tint = fg.copy(alpha = 0.5f)) }
-                        BasicTextField(newItem, { newItem = it }, singleLine = true, textStyle = MaterialTheme.typography.bodyLarge.copy(color = fg), cursorBrush = SolidColor(t.accentStrong),
-                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Next),
-                            keyboardActions = KeyboardActions(onNext = { if (newItem.isNotBlank()) { items.add(CheckItem(false, newItem.trim())); newItem = "" } }),
-                            modifier = Modifier.weight(1f),
-                            decorationBox = { inner -> if (newItem.isEmpty()) Text("List item", style = MaterialTheme.typography.bodyLarge, color = fg.copy(alpha = 0.3f)); inner() })
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                val created = makeEditableCheckItem(allocUid(), false, "")
+                                items.add(created)
+                                pendingFocusUid = created.uid
+                            }
+                            .padding(vertical = 6.dp)
+                    ) {
+                        Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Rounded.Add, null, tint = fg.copy(alpha = 0.5f))
+                        }
+                        Text("List item", style = MaterialTheme.typography.bodyLarge, color = fg.copy(alpha = 0.4f))
                     }
                 }
                 Spacer(Modifier.height(80.dp))

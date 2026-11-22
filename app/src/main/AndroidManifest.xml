@@ -30,7 +30,7 @@
             android:name=".widget.WidgetConfigActivity"
             android:exported="true"
             android:label="Customise Widget"
-            android:theme="@style/Theme.Tidy">
+            android:theme="@style/Theme.Tidy.Wallpaper">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>
             </intent-filter>

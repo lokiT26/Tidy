@@ -78,6 +78,25 @@ object Dates {
         o > 1440 && o % 1440 == 0 -> "${o / 1440} days before"
         o == 60 -> "1 hour before"
         o > 60 && o % 60 == 0 -> "${o / 60} hr before"
-        else -> "$o min before"
+        o < 60 -> "$o min before"
+        else -> {
+            val d = o / 1440
+            val h = (o % 1440) / 60
+            val m = o % 60
+            buildList {
+                if (d > 0) add("${d}d")
+                if (h > 0) add("${h}h")
+                if (m > 0) add("${m}m")
+            }.joinToString(" ") + " before"
+        }
+    }
+
+    fun reminderPreview(dueDate: Long?, dueTime: Int?, offset: Int?): String? {
+        if (dueDate == null || offset == null) return null
+        val baseMinutes = (dueTime ?: (9 * 60)).toLong() - offset.toLong()
+        val ldt = LocalDate.ofEpochDay(dueDate).atStartOfDay().plusMinutes(baseMinutes)
+        val dayStr = label(ldt.toLocalDate().toEpochDay())
+        val timeStr = time(ldt.hour * 60 + ldt.minute)
+        return "$dayStr at $timeStr"
     }
 }

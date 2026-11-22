@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.lokesh.tidy.data.Category
@@ -75,7 +76,12 @@ fun TaskEditorSheet(
     var title by remember { mutableStateOf(base.title.take(MAX_TITLE)) }
     var notes by remember { mutableStateOf(base.notes.take(MAX_NOTES)) }
     var dueDate by remember { mutableStateOf(base.dueDate) }
-    var dueTime by remember { mutableStateOf(base.dueTime) }
+    var dueTime by remember {
+        mutableStateOf(
+            if (base.dueDate != null && base.dueTime == null && base.reminderOffset != null) 9 * 60
+            else base.dueTime
+        )
+    }
     var reminder by remember { mutableStateOf(base.reminderOffset) }
     var priority by remember { mutableIntStateOf(base.priority) }
     var categoryId by remember { mutableStateOf(base.categoryId) }
@@ -177,34 +183,70 @@ fun TaskEditorSheet(
                 Column {
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        item { OptionPill(dueTime?.let { Dates.time(it) } ?: "Add time", Icons.Rounded.Schedule, dueTime != null) { showTime = true } }
-                        if (dueTime != null) item { OptionPill("All day", Icons.Rounded.Close, false) { dueTime = null } }
+                        item { OptionPill(dueTime?.let { "Due · ${Dates.time(it)}" } ?: "Add time", Icons.Rounded.Schedule, dueTime != null) { showTime = true } }
+                        if (dueTime != null) item { OptionPill("All day", Icons.Rounded.Close, false) { dueTime = null; reminder = null } }
                     }
                     Spacer(Modifier.height(14.dp))
-                    Label("Remind me")
-                    val presets = listOf<Int?>(null, 0, 15, 60, 1440)
-                    val isCustomReminder = reminder != null && reminder !in presets
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(presets) { o ->
-                            val lbl = if (o == 0 && dueTime == null) "9:00 AM" else Dates.reminderLabel(o).replace(" before", "")
-                            OptionPill(
-                                text = if (o == null) "Off" else lbl,
-                                icon = if (o == null) Icons.Rounded.NotificationsOff else Icons.Rounded.NotificationsActive,
-                                selected = reminder == o
-                            ) {
-                                reminder = o
-                                if (o != null) ensureFutureDefaultTimeIfToday()
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp, start = 2.dp, end = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Remind me", style = MaterialTheme.typography.labelMedium, color = t.textMuted)
+                        val preview = if (dueTime != null) Dates.reminderPreview(dueDate, dueTime, reminder) else null
+                        if (preview != null) {
+                            Text("🔔 Notifies $preview", style = MaterialTheme.typography.labelSmall, color = t.accentStrong)
+                        }
+                    }
+                    if (dueTime == null) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            item {
+                                OptionPill("Off", Icons.Rounded.NotificationsOff, true) {}
+                            }
+                            item {
+                                OptionPill("Remind at 9:00 AM", Icons.Rounded.NotificationsActive, false) {
+                                    val now = LocalTime.now()
+                                    val nowMin = now.hour * 60 + now.minute
+                                    dueTime = if (dueDate == Dates.today() && nowMin >= 9 * 60) {
+                                        ((now.hour + 1).coerceAtMost(23)) * 60
+                                    } else {
+                                        9 * 60
+                                    }
+                                    reminder = 0
+                                }
+                            }
+                            item {
+                                OptionPill("Pick time…", Icons.Rounded.Schedule, false) { showTime = true }
                             }
                         }
-                        item {
-                            val customText = if (isCustomReminder) {
-                                "Custom · " + Dates.reminderLabel(reminder).replace(" before", "")
-                            } else "Custom…"
-                            OptionPill(
-                                text = customText,
-                                icon = Icons.Rounded.Tune,
-                                selected = isCustomReminder
-                            ) { showCustomReminder = true }
+                    } else {
+                        val presets = listOf<Int?>(null, 0, 15, 60, 1440)
+                        val isCustomReminder = reminder != null && reminder !in presets
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(presets) { o ->
+                                val lbl = when (o) {
+                                    null -> "Off"
+                                    0 -> "At due time"
+                                    else -> Dates.reminderLabel(o)
+                                }
+                                OptionPill(
+                                    text = lbl,
+                                    icon = if (o == null) Icons.Rounded.NotificationsOff else Icons.Rounded.NotificationsActive,
+                                    selected = reminder == o
+                                ) {
+                                    reminder = o
+                                }
+                            }
+                            item {
+                                val customText = if (isCustomReminder) {
+                                    "Custom · " + Dates.reminderLabel(reminder)
+                                } else "Custom…"
+                                OptionPill(
+                                    text = customText,
+                                    icon = Icons.Rounded.Tune,
+                                    selected = isCustomReminder
+                                ) { showCustomReminder = true }
+                            }
                         }
                     }
                     Spacer(Modifier.height(14.dp))
@@ -339,19 +381,15 @@ fun TaskEditorSheet(
         )
     }
     if (showCustomReminder) {
-        val initMin = reminder ?: 10
-        val initUnit = when {
-            initMin > 0 && initMin % 1440 == 0 -> 2 // Days
-            initMin > 0 && initMin % 60 == 0 -> 1   // Hours
-            else -> 0                               // Minutes
-        }
-        val initVal = when (initUnit) {
-            2 -> (initMin / 1440).coerceAtLeast(1)
-            1 -> (initMin / 60).coerceAtLeast(1)
-            else -> initMin.coerceAtLeast(1)
-        }
-        var amountText by remember { mutableStateOf(initVal.toString()) }
-        var unit by remember { mutableIntStateOf(initUnit) } // 0 = min, 1 = hr, 2 = day
+        val initTotal = (reminder ?: 30).coerceAtLeast(0)
+        var daysText by remember { mutableStateOf((initTotal / 1440).toString()) }
+        var hoursText by remember { mutableStateOf(((initTotal % 1440) / 60).toString()) }
+        var minsText by remember { mutableStateOf((initTotal % 60).toString()) }
+
+        val dVal = daysText.toIntOrNull()?.coerceIn(0, 365) ?: 0
+        val hVal = hoursText.toIntOrNull()?.coerceIn(0, 23) ?: 0
+        val mVal = minsText.toIntOrNull()?.coerceIn(0, 59) ?: 0
+        val totalMinutes = dVal * 1440 + hVal * 60 + mVal
 
         AlertDialog(
             onDismissRequest = { showCustomReminder = false },
@@ -361,34 +399,59 @@ fun TaskEditorSheet(
             text = {
                 Column {
                     Text(
-                        if (dueTime != null) "Remind before ${Dates.time(dueTime!!)}"
-                        else "Remind before 9:00 AM (or add a due time)",
+                        "How long before ${dueTime?.let { Dates.time(it) } ?: "9:00 AM"}?",
                         style = MaterialTheme.typography.bodySmall,
                         color = t.textMuted
                     )
                     Spacer(Modifier.height(14.dp))
-                    OutlinedTextField(
-                        value = amountText,
-                        onValueChange = { v -> if (v.all { it.isDigit() } && v.length <= 3) amountText = v },
-                        singleLine = true,
-                        label = { Text("How long before?") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("Minutes", "Hours", "Days").forEachIndexed { idx, label ->
-                            SelectChip(label, unit == idx) { unit = idx }
-                        }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        DurationStepperColumn(
+                            label = "Days",
+                            valueText = daysText,
+                            maxVal = 365,
+                            onValueChange = { daysText = it },
+                            modifier = Modifier.weight(1f)
+                        )
+                        DurationStepperColumn(
+                            label = "Hours",
+                            valueText = hoursText,
+                            maxVal = 23,
+                            onValueChange = { hoursText = it },
+                            modifier = Modifier.weight(1f)
+                        )
+                        DurationStepperColumn(
+                            label = "Minutes",
+                            valueText = minsText,
+                            maxVal = 59,
+                            onValueChange = { minsText = it },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    val preview = Dates.reminderPreview(dueDate, dueTime, totalMinutes)
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(t.accentSoft)
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = if (totalMinutes == 0) "🔔 At due time" + (preview?.let { " ($it)" } ?: "")
+                            else "🔔 ${Dates.reminderLabel(totalMinutes)}" + (preview?.let { " · $it" } ?: ""),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = t.accentStrong
+                        )
                     }
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val n = amountText.toIntOrNull()?.coerceIn(1, 999) ?: 10
-                    val multiplier = when (unit) { 2 -> 1440; 1 -> 60; else -> 1 }
-                    reminder = n * multiplier
+                    reminder = totalMinutes
                     ensureFutureDefaultTimeIfToday()
                     showCustomReminder = false
                 }) { Text("Set reminder") }
@@ -397,6 +460,65 @@ fun TaskEditorSheet(
                 TextButton(onClick = { showCustomReminder = false }) { Text("Cancel") }
             }
         )
+    }
+}
+
+@Composable
+private fun DurationStepperColumn(
+    label: String,
+    valueText: String,
+    maxVal: Int,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val t = tidy
+    val cur = valueText.toIntOrNull()?.coerceIn(0, maxVal) ?: 0
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(t.cardAlt)
+            .border(1.dp, t.divider, RoundedCornerShape(18.dp))
+            .padding(vertical = 6.dp, horizontal = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        IconButton(
+            onClick = { onValueChange(((cur + 1).coerceAtMost(maxVal)).toString()) },
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "Increase $label", tint = t.textMuted)
+        }
+        BasicTextField(
+            value = valueText,
+            onValueChange = { raw ->
+                val digits = raw.filter { it.isDigit() }.take(3)
+                if (digits.isEmpty()) {
+                    onValueChange("")
+                } else {
+                    val v = digits.toIntOrNull()?.coerceIn(0, maxVal) ?: 0
+                    onValueChange(v.toString())
+                }
+            },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.titleLarge.copy(color = t.text, textAlign = TextAlign.Center),
+            cursorBrush = SolidColor(t.accentStrong),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+            decorationBox = { inner ->
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    if (valueText.isEmpty()) {
+                        Text("0", style = MaterialTheme.typography.titleLarge, color = t.textFaint, textAlign = TextAlign.Center)
+                    }
+                    inner()
+                }
+            }
+        )
+        Text(label, style = MaterialTheme.typography.labelSmall, color = t.textMuted)
+        IconButton(
+            onClick = { onValueChange(((cur - 1).coerceAtLeast(0)).toString()) },
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Decrease $label", tint = t.textMuted)
+        }
     }
 }
 
