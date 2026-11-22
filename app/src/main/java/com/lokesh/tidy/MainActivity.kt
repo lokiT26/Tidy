@@ -43,8 +43,10 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.lokesh.tidy.data.AiPlanDraft
 import com.lokesh.tidy.data.Category
 import com.lokesh.tidy.data.Note
+import com.lokesh.tidy.data.Repository
 import com.lokesh.tidy.data.TaskWithSubtasks
 import com.lokesh.tidy.reminder.Reminders
 import com.lokesh.tidy.ui.AppViewModel
@@ -109,6 +111,7 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_ACTION = "tidy_action"
         const val ACTION_NEW_TASK = "new_task"
         const val ACTION_NEW_NOTE = "new_note"
+        const val ACTION_NEW_CHECKLIST = "new_checklist"
         const val ACTION_OPEN_TASK = "open_task"
         const val ACTION_OPEN_NOTE = "open_note"
         const val ACTION_CALENDAR = "calendar"
@@ -167,22 +170,28 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
         mutableIntStateOf(
             when (initLink.action) {
                 MainActivity.ACTION_CALENDAR -> 1
-                MainActivity.ACTION_NEW_NOTE, MainActivity.ACTION_OPEN_NOTE -> 2
+                MainActivity.ACTION_NEW_NOTE, MainActivity.ACTION_NEW_CHECKLIST, MainActivity.ACTION_OPEN_NOTE -> 2
                 else -> 0
             }
         )
     }
     var overlay by remember {
         mutableStateOf(
-            if (initLink.action == MainActivity.ACTION_NEW_NOTE) Overlay.Note else Overlay.None
+            if (initLink.action == MainActivity.ACTION_NEW_NOTE || initLink.action == MainActivity.ACTION_NEW_CHECKLIST) Overlay.Note else Overlay.None
         )
     }
     var editingNote by remember {
         mutableStateOf<Note?>(
-            if (initLink.action == MainActivity.ACTION_NEW_NOTE) Note() else null
+            when (initLink.action) {
+                MainActivity.ACTION_NEW_NOTE -> Note()
+                MainActivity.ACTION_NEW_CHECKLIST -> Note(isChecklist = true)
+                else -> null
+            }
         )
     }
     var editingTask by remember { mutableStateOf<TaskWithSubtasks?>(null) }
+    var sharedAiPlan by remember { mutableStateOf<AiPlanDraft?>(null) }
+    var sharedPlainText by remember { mutableStateOf<String?>(null) }
     var newTask by remember { mutableStateOf(initLink.action == MainActivity.ACTION_NEW_TASK) }
     var newTaskPrefillDate by remember { mutableStateOf<Long?>(initLink.prefillDate) }
     var newTaskPrefillCat by remember { mutableStateOf<Long?>(initLink.prefillCategory) }
@@ -217,6 +226,11 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
                 if (editingNote == null || editingNote?.id != 0L) editingNote = Note()
                 if (overlay != Overlay.Note) overlay = Overlay.Note
             }
+            MainActivity.ACTION_NEW_CHECKLIST -> {
+                if (tab != 2) tab = 2
+                if (editingNote == null || editingNote?.id != 0L) editingNote = Note(isChecklist = true)
+                if (overlay != Overlay.Note) overlay = Overlay.Note
+            }
             MainActivity.ACTION_OPEN_NOTE -> {
                 if (tab != 2) tab = 2
                 val found = notes.find { it.id == curLink.id }
@@ -249,6 +263,19 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
     // Consume pendingIntent and perform direct DB lookup for deep-linked task/note if not yet in Flow
     LaunchedEffect(curIntent) {
         val i = curIntent ?: return@LaunchedEffect
+        if (i.action == Intent.ACTION_SEND) {
+            val shared = i.getStringExtra(Intent.EXTRA_TEXT)?.trim().orEmpty()
+            if (shared.isNotEmpty()) {
+                val parsedPlan = withContext(Dispatchers.Default) { Repository.parseAiPlan(shared) }
+                if (parsedPlan != null) {
+                    sharedAiPlan = parsedPlan
+                } else {
+                    sharedPlainText = shared
+                }
+            }
+            pendingIntent.value = null
+            return@LaunchedEffect
+        }
         val link = MainActivity.parseDeepLink(i)
         when (link.action) {
             MainActivity.ACTION_NEW_TASK -> {
@@ -263,6 +290,12 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
             MainActivity.ACTION_NEW_NOTE -> {
                 tab = 2
                 editingNote = Note()
+                overlay = Overlay.Note
+                pendingIntent.value = null
+            }
+            MainActivity.ACTION_NEW_CHECKLIST -> {
+                tab = 2
+                editingNote = Note(isChecklist = true)
                 overlay = Overlay.Note
                 pendingIntent.value = null
             }
@@ -466,10 +499,20 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
                     Overlay.Settings -> SettingsScreen(vm, s, categories, { editCategory = it; showCategoryDialog = true }) { overlay = Overlay.None }
                     Overlay.Note -> editingNote?.let { n ->
                         key(n.id, n.createdAt) {
-                            NoteEditor(n, onSave = { vm.saveNote(it) }, onDelete = { del ->
-                                vm.deleteNote(del)
-                                showUndoSnackbar("Note deleted") { vm.restoreNote(del) }
-                            }, onClose = { overlay = Overlay.None; editingNote = null })
+                            NoteEditor(
+                                initial = n,
+                                onSave = { vm.saveNote(it) },
+                                onDelete = { del ->
+                                    vm.deleteNote(del)
+                                    showUndoSnackbar("Note deleted") { vm.restoreNote(del) }
+                                },
+                                onClose = { overlay = Overlay.None; editingNote = null },
+                                onConvertToTask = { converted ->
+                                    overlay = Overlay.None
+                                    editingNote = null
+                                    editingTask = converted
+                                }
+                            )
                         }
                     }
                     else -> {}
@@ -508,6 +551,62 @@ fun TidyApp(vm: AppViewModel, s: com.lokesh.tidy.data.AppSettings, pendingIntent
         CategoryDialog(editCategory, onSave = { vm.saveCategory(it); showCategoryDialog = false },
             onDelete = { vm.deleteCategory(it); if (selectedCategory == it.id) selectedCategory = null; showCategoryDialog = false },
             onDismiss = { showCategoryDialog = false })
+    }
+    if (sharedAiPlan != null) {
+        AiPlanImportSheet(
+            vm = vm,
+            s = s,
+            categories = categories,
+            initialDraft = sharedAiPlan,
+            onDismiss = { sharedAiPlan = null }
+        )
+    }
+    sharedPlainText?.let { rawText ->
+        AlertDialog(
+            onDismissRequest = { sharedPlainText = null },
+            containerColor = t.card,
+            shape = RoundedCornerShape(28.dp),
+            title = { Text("Add to Tidy", style = MaterialTheme.typography.titleLarge, color = t.text) },
+            text = {
+                Column {
+                    Text(
+                        rawText.take(180) + if (rawText.length > 180) "…" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = t.textMuted
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = {
+                                val converted = convertNoteToTask("", rawText, isChecklist = false, checklistItems = emptyList())
+                                sharedPlainText = null
+                                editingTask = converted
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(50),
+                            colors = ButtonDefaults.buttonColors(containerColor = t.accentStrong)
+                        ) { Text("+ Task", color = Color.White) }
+                        OutlinedButton(
+                            onClick = {
+                                val lines = rawText.lines().filter { it.isNotBlank() }
+                                val title = if (lines.size > 1) lines.first().take(80) else ""
+                                val body = if (lines.size > 1) lines.drop(1).joinToString("\n") else rawText
+                                sharedPlainText = null
+                                tab = 2
+                                editingNote = Note(title = title, content = body, colorIndex = activeNoteColorFilter ?: 0)
+                                overlay = Overlay.Note
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(50)
+                        ) { Text("+ Note") }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { sharedPlainText = null }) { Text("Cancel") }
+            }
+        )
     }
 }
 

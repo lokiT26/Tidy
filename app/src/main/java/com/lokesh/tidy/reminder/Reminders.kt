@@ -13,6 +13,7 @@ import androidx.core.app.NotificationManagerCompat
 import com.lokesh.tidy.MainActivity
 import com.lokesh.tidy.R
 import com.lokesh.tidy.data.Repository
+import com.lokesh.tidy.data.Subtask
 import com.lokesh.tidy.data.Task
 import com.lokesh.tidy.widget.WidgetUpdater
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +29,7 @@ object Reminders {
     const val ACTION_FIRE = "com.lokesh.tidy.REMIND"
     const val ACTION_DONE = "com.lokesh.tidy.DONE"
     const val ACTION_SNOOZE = "com.lokesh.tidy.SNOOZE"
+    const val ACTION_SNOOZE_1H = "com.lokesh.tidy.SNOOZE_1H"
     const val ACTION_MIDNIGHT = "com.lokesh.tidy.MIDNIGHT"
     const val ACTION_TEST = "com.lokesh.tidy.TEST_REMIND"
 
@@ -116,22 +118,35 @@ object Reminders {
         else am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
     }
 
-    fun show(context: Context, t: Task) {
+    fun show(context: Context, t: Task, subtasks: List<Subtask> = emptyList()) {
         ensureChannel(context)
         val open = PendingIntent.getActivity(context, t.id.toInt(), Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        fun action(a: String) = PendingIntent.getBroadcast(context, (t.id * 10 + a.length).toInt(), Intent(context, ReminderReceiver::class.java).setAction(a).addFlags(Intent.FLAG_RECEIVER_FOREGROUND).putExtra(EXTRA_ID, t.id), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        fun action(a: String) = PendingIntent.getBroadcast(context, (t.id * 10 + a.hashCode()).toInt(), Intent(context, ReminderReceiver::class.java).setAction(a).addFlags(Intent.FLAG_RECEIVER_FOREGROUND).putExtra(EXTRA_ID, t.id), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val sortedSubs = subtasks.sortedBy { it.sortOrder }
+        val shortText = when {
+            t.notes.isNotBlank() -> t.notes
+            sortedSubs.isNotEmpty() -> "${sortedSubs.count { !it.done }} of ${sortedSubs.size} steps remaining"
+            else -> "Time to get it done ✨"
+        }
+        val bigText = if (sortedSubs.isNotEmpty()) {
+            val subLines = sortedSubs.joinToString("\n") { (if (it.done) "☑ " else "☐ ") + it.title }
+            if (t.notes.isNotBlank()) "${t.notes}\n\n$subLines" else subLines
+        } else {
+            shortText
+        }
         val n = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_tidy)
             .setColor(0xFF7C6CF2.toInt())
             .setContentTitle(t.title)
-            .setContentText(t.notes.ifBlank { "Time to get it done ✨" })
-            .setStyle(NotificationCompat.BigTextStyle().bigText(t.notes.ifBlank { "Time to get it done ✨" }))
+            .setContentText(shortText)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
             .setContentIntent(open)
             .addAction(0, "✓ Done", action(ACTION_DONE))
-            .addAction(0, "Snooze 10 min", action(ACTION_SNOOZE))
+            .addAction(0, "Snooze 10m", action(ACTION_SNOOZE))
+            .addAction(0, "+1 hour", action(ACTION_SNOOZE_1H))
             .build()
         try { NotificationManagerCompat.from(context).notify(t.id.toInt(), n) } catch (_: SecurityException) {}
     }
@@ -145,9 +160,10 @@ class ReminderReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 when (intent.action) {
-                    Reminders.ACTION_FIRE -> repo.dao.task(id)?.task?.takeIf { !it.completed }?.let { Reminders.show(context, it) }
+                    Reminders.ACTION_FIRE -> repo.dao.task(id)?.takeIf { !it.task.completed }?.let { Reminders.show(context, it.task, it.subtasks) }
                     Reminders.ACTION_DONE -> { NotificationManagerCompat.from(context).cancel(id.toInt()); repo.setCompleted(id, true) }
                     Reminders.ACTION_SNOOZE -> { NotificationManagerCompat.from(context).cancel(id.toInt()); repo.snooze(id, 10) }
+                    Reminders.ACTION_SNOOZE_1H -> { NotificationManagerCompat.from(context).cancel(id.toInt()); repo.snooze(id, 60) }
                     Reminders.ACTION_MIDNIGHT -> { WidgetUpdater.updateAll(context); Reminders.scheduleMidnight(context) }
                     Reminders.ACTION_TEST -> Reminders.show(
                         context,

@@ -2,12 +2,14 @@ package com.lokesh.tidy
 
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import com.lokesh.tidy.data.AiUndoSummary
 import com.lokesh.tidy.data.Repository
 import com.lokesh.tidy.data.Task
 import com.lokesh.tidy.reminder.Reminders
 import com.lokesh.tidy.ui.Dates
 import com.lokesh.tidy.ui.screens.CheckItem
 import com.lokesh.tidy.ui.screens.applyChecklistValueChange
+import com.lokesh.tidy.ui.screens.convertNoteToTask
 import com.lokesh.tidy.ui.screens.makeEditableCheckItem
 import com.lokesh.tidy.ui.screens.parseChecklist
 import com.lokesh.tidy.ui.screens.serializeChecklist
@@ -207,5 +209,54 @@ class TidyLogicTest {
         assertEquals(2, items.size)
         assertEquals("Buy milk", items[0].cleanText)
         assertEquals("", items[1].cleanText)
+    }
+
+    @Test
+    fun aiPlan_parsesFencedJsonFieldsAndUndoReceipt() {
+        val today = LocalDate.of(2026, 11, 22)
+        val aiReply = """
+            Here is your plan:
+            ```json
+            {"tasks":[{"title":"Study Kotlin"}]}
+            ```
+        """.trimIndent()
+
+        assertEquals("""{"tasks":[{"title":"Study Kotlin"}]}""", Repository.extractJsonObjectOrArray(aiReply))
+        assertEquals(LocalDate.of(2026, 11, 24).toEpochDay(), Repository.parseFlexibleDate("2026-11-24", today))
+        assertEquals(today.plusDays(1).toEpochDay(), Repository.parseFlexibleDate("tomorrow", today))
+        assertEquals(today.plusDays(3).toEpochDay(), Repository.parseFlexibleDate("+3d", today))
+        assertNull(Repository.parseFlexibleDate("someday", today))
+
+        assertEquals(16 * 60 + 30, Repository.parseFlexibleTime("16:30"))
+        assertEquals(16 * 60 + 30, Repository.parseFlexibleTime("4:30 PM"))
+        assertEquals(9 * 60, Repository.parseFlexibleTime("9:00 AM"))
+        assertEquals(3, Repository.parseFlexiblePriority("high"))
+        assertEquals(5, Repository.parseFlexibleNoteColor("butter"))
+
+        val prompt = Repository.buildAiPrompt(emptyList(), today)
+        assertTrue(prompt.contains("2026-11-22"))
+        assertTrue(prompt.contains("\"tasks\""))
+        assertTrue(prompt.contains("\"notes\""))
+
+        val receipt = AiUndoSummary(listOf(11L, 12L), listOf(5L), listOf(3L))
+        val parsedReceipt = AiUndoSummary.fromJson(receipt.toJson())
+        assertEquals(receipt, parsedReceipt)
+        assertEquals("2 tasks & 1 note", receipt.label())
+    }
+
+    @Test
+    fun convertNoteToTask_mapsChecklistItemsToSubtasks() {
+        val converted = convertNoteToTask(
+            title = "Weekend Trip",
+            content = "",
+            isChecklist = true,
+            checklistItems = listOf(CheckItem(true, "Book tickets"), CheckItem(false, "Pack bag"))
+        )
+        assertEquals("Weekend Trip", converted.task.title)
+        assertEquals(2, converted.subtasks.size)
+        assertTrue(converted.subtasks[0].done)
+        assertEquals("Book tickets", converted.subtasks[0].title)
+        assertFalse(converted.subtasks[1].done)
+        assertEquals("Pack bag", converted.subtasks[1].title)
     }
 }

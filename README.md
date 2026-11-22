@@ -77,7 +77,8 @@ Grab the latest signed APK from [**GitHub Releases**](https://github.com/lokiT26
 - **Calendar** — Expandable week/month grid with horizontal swipe navigation and vertical timeline.
 - **Notes** — Google Keep-style staggered masonry grid, pinned notes, pastel colours, checklists with multi-line item support, per-section box height presets (`Auto`, `Small`, `Medium`, `Large`), colour & type filtering, sorting, and real Gaussian blur to hide sensitive notes.
 - **Insights** — Streaks, weekly completion chart, 18-week activity heatmap, and per-list progress.
-- **5 Customisable Home-Screen Widgets** — To-Do List, responsive Today Progress (`3×1`, `2×1`, `1×1`), Sticky Note (with interactive checklists), interactive Week + Tasks, and 1×1 Quick Add — each with live-preview customisation for background style, opacity, corner radius, theme (System/Light/Dark/AMOLED), accent palette, font size & style, and density.
+- **5 Customisable Home-Screen Widgets** — To-Do List, responsive Today Progress (`3×1`, `2×1`, `1×1`), Sticky Note (with interactive checklists), interactive Week + Tasks, and 1×1 Quick Add — each with live-preview customisation over your real home-screen wallpaper for background style, opacity, corner radius, theme (System/Light/Dark/AMOLED), accent palette, font size & style, and density.
+- **Offline AI Plan Import & Share-to-Tidy** — Copy a ready-made adaptive prompt from Tidy into any AI (ChatGPT, Gemini, Claude), then paste, share, or import the response to batch-add scheduled tasks, reminders, subtasks, and checklist notes with preview & 1-tap Undo — while keeping zero internet permission.
 - **Private & Offline** — Zero internet permission, no account, and full JSON Export / Restore backups.
 
 ## Building from Source

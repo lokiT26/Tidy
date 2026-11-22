@@ -26,6 +26,8 @@ data class AppSettings(
     val pinnedNoteSizeMode: Int = 0,
     /** 0 = Custom order, 1 = Newest edited, 2 = Newest created, 3 = Oldest edited, 4 = Title A-Z */
     val notesSortOrder: Int = 0,
+    /** JSON receipt of the last AI plan import for 1-tap Undo */
+    val lastAiImportBatch: String = "",
 )
 
 class SettingsStore(private val context: Context) {
@@ -43,6 +45,7 @@ class SettingsStore(private val context: Context) {
         val separatePinnedNoteSize = booleanPreferencesKey("separate_pinned_note_size")
         val pinnedNoteSizeMode = intPreferencesKey("pinned_note_size_mode")
         val notesSortOrder = intPreferencesKey("notes_sort_order")
+        val lastAiImportBatch = stringPreferencesKey("last_ai_import_batch")
     }
 
     val flow: Flow<AppSettings> = context.dataStore.data.map {
@@ -60,6 +63,7 @@ class SettingsStore(private val context: Context) {
             separatePinnedNoteSize = it[K.separatePinnedNoteSize] ?: false,
             pinnedNoteSizeMode = it[K.pinnedNoteSizeMode] ?: 0,
             notesSortOrder = it[K.notesSortOrder] ?: 0,
+            lastAiImportBatch = it[K.lastAiImportBatch] ?: "",
         )
     }
 
@@ -74,6 +78,7 @@ class SettingsStore(private val context: Context) {
     suspend fun setSeparatePinnedNoteSize(v: Boolean) = context.dataStore.edit { it[K.separatePinnedNoteSize] = v }
     suspend fun setPinnedNoteSizeMode(v: Int) = context.dataStore.edit { it[K.pinnedNoteSizeMode] = v }
     suspend fun setNotesSortOrder(v: Int) = context.dataStore.edit { it[K.notesSortOrder] = v }
+    suspend fun setLastAiImportBatch(v: String) = context.dataStore.edit { it[K.lastAiImportBatch] = v }
     suspend fun setLastEditorDefaults(priority: Int, categoryId: Long?) = context.dataStore.edit {
         it[K.lastPriority] = priority
         it[K.lastCategoryId] = categoryId ?: -1L

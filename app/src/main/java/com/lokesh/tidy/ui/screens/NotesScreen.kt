@@ -53,6 +53,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lokesh.tidy.data.Note
+import com.lokesh.tidy.data.Subtask
+import com.lokesh.tidy.data.Task
+import com.lokesh.tidy.data.TaskWithSubtasks
 import com.lokesh.tidy.ui.components.*
 import com.lokesh.tidy.ui.theme.Palette
 import com.lokesh.tidy.ui.theme.tidy
@@ -208,6 +211,46 @@ fun parseChecklist(content: String): List<CheckItem> {
 
 fun serializeChecklist(items: List<CheckItem>) = items.joinToString("\n") {
     (if (it.done) "[x] " else "[ ] ") + it.text.replace("\u200B", "")
+}
+
+fun convertNoteToTask(
+    title: String,
+    content: String,
+    isChecklist: Boolean,
+    checklistItems: List<CheckItem>,
+): TaskWithSubtasks {
+    val cleanTitle = title.trim()
+    return if (isChecklist) {
+        val nonBlank = checklistItems.filter { it.text.isNotBlank() }
+        val taskTitle = when {
+            cleanTitle.isNotEmpty() -> cleanTitle.take(150)
+            nonBlank.isNotEmpty() -> nonBlank.first().text.replace("\n", " · ").trim().take(150)
+            else -> "Untitled task"
+        }
+        val subItems = if (cleanTitle.isNotEmpty()) nonBlank else nonBlank.drop(1)
+        val subtasks = subItems.mapIndexed { idx, ci ->
+            Subtask(
+                taskId = 0,
+                title = ci.text.replace("\n", " · ").trim().take(120),
+                done = ci.done,
+                sortOrder = idx
+            )
+        }
+        TaskWithSubtasks(Task(title = taskTitle), subtasks)
+    } else {
+        val lines = content.replace("\u200B", "").trim().lines()
+        val taskTitle = if (cleanTitle.isNotEmpty()) {
+            cleanTitle.take(150)
+        } else {
+            lines.firstOrNull { it.isNotBlank() }?.trim()?.take(150) ?: "Untitled task"
+        }
+        val taskNotes = if (cleanTitle.isNotEmpty()) {
+            content.replace("\u200B", "").trim().take(2000)
+        } else {
+            lines.dropWhile { it.isBlank() }.drop(1).joinToString("\n").trim().take(2000)
+        }
+        TaskWithSubtasks(Task(title = taskTitle, notes = taskNotes), emptyList())
+    }
 }
 
 /**
@@ -856,7 +899,13 @@ fun NoteCard(
 }
 
 @Composable
-fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, onClose: () -> Unit) {
+fun NoteEditor(
+    initial: Note,
+    onSave: (Note) -> Unit,
+    onDelete: (Note) -> Unit,
+    onClose: () -> Unit,
+    onConvertToTask: ((TaskWithSubtasks) -> Unit)? = null,
+) {
     val t = tidy
     var title by remember { mutableStateOf(initial.title) }
     var content by remember { mutableStateOf(initial.content) }
@@ -864,6 +913,7 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
     var pinned by remember { mutableStateOf(initial.pinned) }
     var hidden by remember { mutableStateOf(initial.hidden) }
     var checklist by remember { mutableStateOf(initial.isChecklist) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     var nextUid by remember { mutableLongStateOf(1L) }
     fun allocUid(): Long = nextUid++
     val items = remember {
@@ -963,6 +1013,30 @@ fun NoteEditor(initial: Note, onSave: (Note) -> Unit, onDelete: (Note) -> Unit, 
                 IconButton(onClick = { pinned = !pinned }) { Icon(Icons.Rounded.PushPin, "Pin", tint = if (pinned) t.accentStrong else fg.copy(alpha = 0.45f)) }
                 if (initial.id != 0L) {
                     ConfirmDeleteButton(onConfirmDelete = { onDelete(initial); onClose() }, iconTint = fg)
+                }
+                if (onConvertToTask != null) {
+                    Box {
+                        IconButton(onClick = { showMoreMenu = true }) {
+                            Icon(Icons.Rounded.MoreVert, "More options", tint = fg.copy(alpha = 0.45f))
+                        }
+                        DropdownMenu(
+                            expanded = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false },
+                            containerColor = t.card
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Turn into task", color = t.text) },
+                                leadingIcon = { Icon(Icons.Rounded.TaskAlt, null, tint = t.accentStrong, modifier = Modifier.size(18.dp)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    val checkListSnapshot = items.map { CheckItem(it.done, it.cleanText.trimEnd()) }.filter { it.text.isNotBlank() }
+                                    val converted = convertNoteToTask(title, content, checklist, checkListSnapshot)
+                                    close()
+                                    onConvertToTask(converted)
+                                }
+                            )
+                        }
+                    }
                 }
             }
             AnimatedVisibility(visible = hidden) {

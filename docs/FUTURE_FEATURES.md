@@ -1,52 +1,45 @@
-# Tidy — Future Features & Roadmap
+# Tidy — Features Roadmap & New Additions (`v1.7`)
 
-Ideas and features planned for future iterations of **Tidy**, designed to keep the app **100% offline, zero-permission, minimal, and fast**.
+Features designed to make **Tidy** faster and more useful while keeping it **100% offline, zero-permission, and minimal**.
 
 ---
 
-## 1. Structured AI Plan Import ("Bring Your Own AI")
+## 1. Structured AI Plan Import ("Bring Your Own AI" — Tasks + Notes + Undo)
+- **Single Adaptive AI Prompt (`Copy AI prompt`):**
+  - Pre-filled with **today's date**, the user's **existing list names**, and a unified JSON schema supporting both **`tasks`** (with dates, times, reminder offsets, repeat rules, priorities, lists, and subtasks) and **`notes`** (regular notes or checklist notes, pastel colors `0..7`, pin & hidden flags).
+  - Includes strict anti-bloat instructions so the AI generates *only* what the user asks for (tasks only, notes only, or both) without inventing filler items.
+- **Clipboard Paste, File Import & Preview:**
+  - Accepts raw JSON or AI responses wrapped in ` ```json ... ``` ` code blocks via **Paste from clipboard**, **Pick `.json` file**, or **Android Share Sheet**.
+  - Shows a confirmation preview listing the parsed tasks and notes before merging them into Tidy.
+- **1-Tap `Undo last import`:**
+  - Records the exact IDs of the last imported batch (`tasks`, `notes`, and any newly created `categories`) so the user can roll back the entire AI import in one tap if they want to tweak their prompt.
 
-### Problem
-When planning a month, week, study schedule, or project with an external AI assistant (ChatGPT, Claude, Gemini, etc.), manually entering dozens of generated tasks, dates, times, reminders, repeat rules, and subtasks into Tidy is repetitive and slow.
+---
 
-### Why Tidy's Raw Backup JSON Cannot Be Used Directly
-- **Destructive restore:** `Repository.importJson()` (`Restore backup`) wipes all existing tasks, notes, and lists before restoring. AI plan import must **merge/append** into existing data.
-- **Epoch math errors in LLMs:** Tidy stores `dueDate` as epoch days (e.g. `20780`) and `dueTime` as minutes from midnight (e.g. `990`). LLMs frequently miscalculate epoch-day integers.
-- **Database IDs vs. names:** Backup JSON references `categoryId` (`1`, `2`) instead of human-readable list names (`"Work"`, `"Health"`).
+## 2. "Share to Tidy" (Android System Share Sheet)
+- Registers Tidy as a share target for `text/plain` (`Intent.ACTION_SEND`):
+  - **AI Plan JSON shared from ChatGPT / Gemini / Claude:** Automatically opens Tidy's **Import AI Plan preview** sheet.
+  - **Regular text shared from any app:** Opens a compact prompt letting the user turn the shared text into a **New Task** or **New Note** in one tap.
 
-### Proposed Architecture & Flow
-1. **Placement (Minimalism-First):**
-   - No new icons or buttons on `Today`, `Calendar`, `Notes`, or `Insights`.
-   - Single row in **Settings → Backup**: **`Import AI plan`**.
-2. **1-Tap `Copy AI prompt`:**
-   - Copies a compact system instruction pre-filled with **today's ISO date**, the user's **existing list names & emojis**, and the **human-readable Tidy JSON schema**.
-3. **Human/AI-Friendly JSON Schema:**
-   ```json
-   {
-     "tasks": [
-       {
-         "title": "Submit project report",
-         "notes": "Include Q4 metrics",
-         "date": "2026-11-24",
-         "time": "16:30",
-         "reminderMinutesBefore": 15,
-         "priority": "high",
-         "list": "Work",
-         "repeat": "NONE",
-         "subtasks": ["Draft summary", "Export PDF"]
-       }
-     ],
-     "notes": [
-       {
-         "title": "Weekly Focus",
-         "checklist": true,
-         "color": 1,
-         "pinned": false,
-         "items": ["Review lecture notes", "Practice problems"]
-       }
-     ]
-   }
-   ```
-4. **Import via Clipboard Paste or `.json` File:**
-   - Supports **1-tap Paste from Clipboard** (fastest on mobile AI apps) as well as **Pick `.json` file**.
-   - **Confirmation preview before adding:** Displays how many tasks, reminders, lists, and notes were parsed before inserting them into Room and scheduling alarms via `Reminders.schedule()`.
+---
+
+## 3. Convert Note → Task (Unobtrusive in Note Editor `⋮` Menu)
+- Tucked inside a subtle `⋮` overflow menu in the Note Editor top bar so it never clutters daily note-taking:
+  - Converts a **Checklist Note** into a **Task** with all checklist items automatically mapped to **Subtasks**.
+  - Converts a **Text Note** into a **Task** with the note body placed into the task's **Details**.
+  - Opens `TaskEditorSheet` pre-filled with the converted task and subtasks so the user can pick a due date/reminder before saving.
+
+---
+
+## 4. Smarter Reminder Notifications (`+1 hr` Action + Subtasks Preview)
+- Expands reminder notifications with:
+  - **3 Action Buttons:** `✓ Done`, `Snooze 10m`, and `+1 hour`.
+  - **Subtasks in Expanded Notification:** Shows the task's subtasks (`☐` / `☑`) directly inside the notification body so steps are visible from the lock screen without opening the app.
+
+---
+
+## 5. Home-Screen App Icon Shortcuts (Long-Press Tidy Icon)
+- Native Android static launcher shortcuts (`res/xml/shortcuts.xml`) when long-pressing the Tidy app icon:
+  - **`+ New Task`**
+  - **`+ New Note`**
+  - **`+ Checklist`**

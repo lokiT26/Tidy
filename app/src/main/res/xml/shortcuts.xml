@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_task"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher_round"
+        android:shortcutShortLabel="@string/sc_new_task_short"
+        android:shortcutLongLabel="@string/sc_new_task_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.lokesh.tidy"
+            android:targetClass="com.lokesh.tidy.MainActivity"
+            android:data="tidy://widget/new_task" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="new_note"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher_round"
+        android:shortcutShortLabel="@string/sc_new_note_short"
+        android:shortcutLongLabel="@string/sc_new_note_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.lokesh.tidy"
+            android:targetClass="com.lokesh.tidy.MainActivity"
+            android:data="tidy://widget/new_note" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="new_checklist"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher_round"
+        android:shortcutShortLabel="@string/sc_new_checklist_short"
+        android:shortcutLongLabel="@string/sc_new_checklist_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.lokesh.tidy"
+            android:targetClass="com.lokesh.tidy.MainActivity"
+            android:data="tidy://widget/new_checklist" />
+    </shortcut>
+</shortcuts>

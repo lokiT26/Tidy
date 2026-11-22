@@ -67,7 +67,15 @@ fun TaskEditorSheet(
     val t = tidy
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val validDefaultCat = defaultCategory?.takeIf { id -> categories.any { it.id == id } }
-    val base = initial?.task ?: Task(
+    val isExistingTask = initial != null && initial.task.id != 0L
+    val base = initial?.task?.let { draft ->
+        if (isExistingTask) draft
+        else draft.copy(
+            dueDate = draft.dueDate ?: defaultDate,
+            categoryId = draft.categoryId ?: validDefaultCat,
+            priority = if (draft.priority != 0) draft.priority else defaultPriority.coerceIn(0, 3),
+        )
+    } ?: Task(
         title = "",
         dueDate = defaultDate,
         categoryId = validDefaultCat,
@@ -110,7 +118,7 @@ fun TaskEditorSheet(
             reminderOffset = if (dueDate == null) null else reminder, priority = priority, categoryId = categoryId, repeat = if (dueDate == null) "NONE" else repeat), finalSubs)
     }
 
-    LaunchedEffect(Unit) { if (initial == null) focus.requestFocus() }
+    LaunchedEffect(Unit) { if (!isExistingTask && title.isEmpty()) focus.requestFocus() }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -128,8 +136,8 @@ fun TaskEditorSheet(
                 .padding(bottom = 18.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (initial == null) "New task" else "Edit task", style = MaterialTheme.typography.labelLarge, color = t.textMuted, modifier = Modifier.weight(1f))
-                if (initial != null && onDelete != null) {
+                Text(if (!isExistingTask) "New task" else "Edit task", style = MaterialTheme.typography.labelLarge, color = t.textMuted, modifier = Modifier.weight(1f))
+                if (isExistingTask && onDelete != null) {
                     ConfirmDeleteButton(onConfirmDelete = { onDelete(base) })
                 }
             }
@@ -352,7 +360,7 @@ fun TaskEditorSheet(
                         .background(if (enabled) Brush.horizontalGradient(listOf(t.accentStrong, t.accent.partner)) else SolidColor(t.cardAlt))
                         .clickable(enabled = enabled) { save() }
                         .padding(horizontal = 28.dp, vertical = 14.dp)
-                ) { Text(if (initial == null) "Add task" else "Save", style = MaterialTheme.typography.titleSmall, color = if (enabled) Color.White else t.textFaint) }
+                ) { Text(if (!isExistingTask) "Add task" else "Save", style = MaterialTheme.typography.titleSmall, color = if (enabled) Color.White else t.textFaint) }
             }
         }
     }

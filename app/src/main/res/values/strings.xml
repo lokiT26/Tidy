@@ -5,4 +5,10 @@
     <string name="w_sticky_desc">Pin a pastel note to your home screen</string>
     <string name="w_cal_desc">7-day week strip with today\'s tasks</string>
     <string name="w_quick_desc">One-tap button to add a task or note</string>
+    <string name="sc_new_task_short">New task</string>
+    <string name="sc_new_task_long">Add a new task</string>
+    <string name="sc_new_note_short">New note</string>
+    <string name="sc_new_note_long">Write a new note</string>
+    <string name="sc_new_checklist_short">Checklist</string>
+    <string name="sc_new_checklist_long">New checklist note</string>
 </resources>
