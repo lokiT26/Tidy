@@ -4,7 +4,7 @@ Tracks UX issues, edge cases, and fixes across versions.
 
 ---
 
-## Resolved (Post-`v1.6`)
+## Resolved in `v1.6.1`
 
 ### 1. [Fixed] Distinction Between `Add time` (When) and `Remind me` in Task Editor
 - **Location:** `app/src/main/java/com/lokesh/tidy/ui/screens/TaskEditor.kt` & `AppViewModel.kt` (`Dates.reminderPreview`)
