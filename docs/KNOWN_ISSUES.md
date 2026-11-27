@@ -4,6 +4,21 @@ Tracks UX issues, edge cases, and fixes across versions.
 
 ---
 
+## Resolved in `v1.7.1`
+
+### 1. [Fixed] AI Plan Prompt Guidance for Smart Structural Decisions & Mobile-Friendly Lengths
+- **Location:** `app/src/main/java/com/lokesh/tidy/data/Repository.kt` (`Repository.buildAiPrompt`)
+- **Resolution:**
+  - Updated the copied AI prompt so the AI knows it has full creative and structural flexibility across Tidy's features (`tasks`, `subtasks`, `details`, `dates`, `times`, `reminders`, `repeat`, `priorities`, `lists`, `text notes`, and `checklist notes`) and should choose the best structure for the user's specific request, context, and scenario.
+  - Enforced mobile-screen length guidelines: **task titles 2–7 words (under ~45 chars)**, **subtasks under 15–16 words**, and **note titles 1–5 words (under ~32 chars)**.
+
+### 2. [Fixed] Single-Line Horizontal Subtask Cursor-Handle Drag Auto-Scrolling in Task Editor
+- **Location:** `app/src/main/java/com/lokesh/tidy/ui/screens/TaskEditor.kt` (`SingleLineSubtaskField`)
+- **Resolution:**
+  - Migrated subtask fields to single-line `BasicTextField(state = TextFieldState, lineLimits = TextFieldLineLimits.SingleLine, scrollState = scrollState)` with edge-pan and continuous auto-scrolling when dragging the cursor teardrop handle (`|`) toward the right or left end of the subtask box.
+
+---
+
 ## Resolved in `v1.6.1`
 
 ### 1. [Fixed] Distinction Between `Add time` (When) and `Remind me` in Task Editor

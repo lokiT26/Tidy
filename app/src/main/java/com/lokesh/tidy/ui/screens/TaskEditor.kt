@@ -13,6 +13,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.KeyboardActionHandler
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Notes
@@ -24,10 +27,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -43,6 +53,7 @@ import com.lokesh.tidy.ui.components.ConfirmDeleteButton
 import com.lokesh.tidy.ui.components.SelectChip
 import com.lokesh.tidy.ui.theme.Palette
 import com.lokesh.tidy.ui.theme.tidy
+import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -51,6 +62,11 @@ import java.time.ZoneOffset
 private const val MAX_TITLE = 150
 private const val MAX_NOTES = 2000
 private const val MAX_SUBTASK = 120
+
+private data class EditableSubtask(
+    val uid: Long,
+    val sub: Subtask,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -94,8 +110,15 @@ fun TaskEditorSheet(
     var priority by remember { mutableIntStateOf(base.priority) }
     var categoryId by remember { mutableStateOf(base.categoryId) }
     var repeat by remember { mutableStateOf(base.repeat) }
-    val subs = remember { mutableStateListOf<Subtask>().apply { addAll(initial?.subtasks?.sortedBy { it.sortOrder } ?: emptyList()) } }
+    var nextSubUid by remember { mutableLongStateOf(1L) }
+    val subs = remember {
+        mutableStateListOf<EditableSubtask>().apply {
+            val initList = initial?.subtasks?.sortedBy { it.sortOrder } ?: emptyList()
+            initList.forEach { add(EditableSubtask(nextSubUid++, it)) }
+        }
+    }
     var newSub by remember { mutableStateOf("") }
+    var newSubResetToken by remember { mutableIntStateOf(0) }
     var showDate by remember { mutableStateOf(false) }
     var showTime by remember { mutableStateOf(false) }
     var showCustomReminder by remember { mutableStateOf(false) }
@@ -112,7 +135,7 @@ fun TaskEditorSheet(
 
     fun save() {
         if (title.isBlank()) { onDismiss(); return }
-        val cleanedSubs = subs.map { it.copy(title = it.title.trim().take(MAX_SUBTASK)) }.filter { it.title.isNotEmpty() }
+        val cleanedSubs = subs.map { it.sub.copy(title = it.sub.title.trim().take(MAX_SUBTASK)) }.filter { it.title.isNotEmpty() }
         val finalSubs = if (newSub.isNotBlank()) cleanedSubs + Subtask(taskId = 0, title = newSub.trim().take(MAX_SUBTASK)) else cleanedSubs
         onSave(base.copy(title = title.trim().take(MAX_TITLE), notes = notes.trim().take(MAX_NOTES), dueDate = dueDate, dueTime = if (dueDate == null) null else dueTime,
             reminderOffset = if (dueDate == null) null else reminder, priority = priority, categoryId = categoryId, repeat = if (dueDate == null) "NONE" else repeat), finalSubs)
@@ -305,42 +328,64 @@ fun TaskEditorSheet(
 
             Spacer(Modifier.height(14.dp))
             Label("Subtasks")
-            subs.forEachIndexed { i, s ->
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                    IconButton(onClick = { subs[i] = s.copy(done = !s.done) }, modifier = Modifier.size(34.dp)) {
-                        Icon(if (s.done) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked, null, tint = if (s.done) t.accentStrong else t.textFaint)
+            subs.forEachIndexed { i, item ->
+                key(item.uid) {
+                    val s = item.sub
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                        IconButton(onClick = { subs[i] = item.copy(sub = s.copy(done = !s.done)) }, modifier = Modifier.size(34.dp)) {
+                            Icon(if (s.done) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked, null, tint = if (s.done) t.accentStrong else t.textFaint)
+                        }
+                        SingleLineSubtaskField(
+                            initialValue = s.title,
+                            resetToken = 0,
+                            onValueChange = { updated ->
+                                val idx = subs.indexOfFirst { it.uid == item.uid }
+                                if (idx >= 0) subs[idx] = subs[idx].copy(sub = subs[idx].sub.copy(title = updated))
+                            },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                color = if (s.done) t.textFaint else t.text,
+                                textDecoration = if (s.done) TextDecoration.LineThrough else null
+                            ),
+                            cursorBrush = SolidColor(t.accentStrong),
+                            imeAction = ImeAction.Done,
+                            onImeAction = null,
+                            placeholder = null,
+                            modifier = Modifier.weight(1f).padding(vertical = 4.dp),
+                        )
+                        if (s.title.length >= MAX_SUBTASK * 3 / 4) {
+                            Text("${s.title.length}/$MAX_SUBTASK", style = MaterialTheme.typography.labelSmall,
+                                color = if (s.title.length >= MAX_SUBTASK) Palette.danger else t.textFaint,
+                                modifier = Modifier.padding(horizontal = 4.dp))
+                        }
+                        IconButton(
+                            onClick = {
+                                val idx = subs.indexOfFirst { it.uid == item.uid }
+                                if (idx >= 0) subs.removeAt(idx)
+                            },
+                            modifier = Modifier.size(34.dp)
+                        ) { Icon(Icons.Rounded.Close, null, tint = t.textFaint, modifier = Modifier.size(18.dp)) }
                     }
-                    BasicTextField(
-                        value = s.title,
-                        onValueChange = { updated -> if (updated.length <= MAX_SUBTASK) subs[i] = s.copy(title = updated) },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(
-                            color = if (s.done) t.textFaint else t.text,
-                            textDecoration = if (s.done) TextDecoration.LineThrough else null
-                        ),
-                        cursorBrush = SolidColor(t.accentStrong),
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
-                        modifier = Modifier.weight(1f).padding(vertical = 4.dp),
-                    )
-                    if (s.title.length >= MAX_SUBTASK * 3 / 4) {
-                        Text("${s.title.length}/$MAX_SUBTASK", style = MaterialTheme.typography.labelSmall,
-                            color = if (s.title.length >= MAX_SUBTASK) Palette.danger else t.textFaint,
-                            modifier = Modifier.padding(horizontal = 4.dp))
-                    }
-                    IconButton(onClick = { subs.removeAt(i) }, modifier = Modifier.size(34.dp)) { Icon(Icons.Rounded.Close, null, tint = t.textFaint, modifier = Modifier.size(18.dp)) }
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(t.cardAlt).padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Icon(Icons.Rounded.Add, null, tint = t.textMuted, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                BasicTextField(
-                    value = newSub, onValueChange = { if (it.length <= MAX_SUBTASK) newSub = it },
+                SingleLineSubtaskField(
+                    initialValue = "",
+                    resetToken = newSubResetToken,
+                    onValueChange = { newSub = it },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = t.text),
-                    cursorBrush = SolidColor(t.accentStrong), singleLine = true,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Next),
-                    keyboardActions = KeyboardActions(onNext = { if (newSub.isNotBlank()) { subs.add(Subtask(taskId = 0, title = newSub.trim().take(MAX_SUBTASK))); newSub = "" } }),
+                    cursorBrush = SolidColor(t.accentStrong),
+                    imeAction = ImeAction.Next,
+                    onImeAction = {
+                        if (newSub.isNotBlank()) {
+                            subs.add(EditableSubtask(nextSubUid++, Subtask(taskId = 0, title = newSub.trim().take(MAX_SUBTASK))))
+                            newSub = ""
+                            newSubResetToken++
+                        }
+                    },
+                    placeholder = "Add a step",
                     modifier = Modifier.weight(1f),
-                    decorationBox = { inner -> if (newSub.isEmpty()) Text("Add a step", style = MaterialTheme.typography.bodyLarge, color = t.textFaint); inner() }
                 )
                 if (newSub.length >= MAX_SUBTASK * 3 / 4) {
                     Text("${newSub.length}/$MAX_SUBTASK", style = MaterialTheme.typography.labelSmall,
@@ -528,6 +573,192 @@ private fun DurationStepperColumn(
             Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Decrease $label", tint = t.textMuted)
         }
     }
+}
+
+@Composable
+private fun SingleLineSubtaskField(
+    initialValue: String,
+    resetToken: Int,
+    onValueChange: (String) -> Unit,
+    textStyle: TextStyle,
+    cursorBrush: Brush,
+    imeAction: ImeAction,
+    onImeAction: (() -> Unit)?,
+    placeholder: String?,
+    modifier: Modifier = Modifier,
+) {
+    val t = tidy
+    val tfState = rememberTextFieldState(initialText = initialValue)
+    val scrollState = rememberScrollState()
+    var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var boxWidthPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
+    val edgeZonePx = with(density) { 28.dp.toPx() }
+    val scrollSpeedPxPerSec = with(density) { 240.dp.toPx() }
+    var autoScrollDir by remember { mutableIntStateOf(0) }
+    var anchorXInBox by remember { mutableFloatStateOf(0f) }
+    var programmaticCursor by remember { mutableIntStateOf(-1) }
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnImeAction by rememberUpdatedState(onImeAction)
+
+    // Only reset when resetToken increments (when "Add a step" submits and clears to empty) — never fight active typing!
+    LaunchedEffect(resetToken) {
+        if (resetToken > 0) {
+            autoScrollDir = 0
+            tfState.edit {
+                replace(0, length, "")
+                selection = TextRange(0)
+            }
+            scrollState.scrollTo(0)
+        }
+    }
+
+    LaunchedEffect(tfState) {
+        var prevText = tfState.text.toString()
+        var prevOffset = tfState.selection.start
+        var dragSteps = 0
+        var lastDir = 0
+
+        snapshotFlow { tfState.text.toString() to tfState.selection }.collect { (txt, sel) ->
+            if (txt.contains("\n")) {
+                val cleaned = txt.replace("\n", " ").take(MAX_SUBTASK)
+                tfState.edit { replace(0, length, cleaned) }
+                currentOnValueChange(cleaned)
+                currentOnImeAction?.invoke()
+                prevText = tfState.text.toString()
+                prevOffset = tfState.selection.start
+                autoScrollDir = 0
+                return@collect
+            }
+            if (txt.length > MAX_SUBTASK) {
+                val clamped = txt.take(MAX_SUBTASK)
+                tfState.edit { replace(0, length, clamped) }
+                currentOnValueChange(clamped)
+                prevText = clamped
+                prevOffset = tfState.selection.start
+                return@collect
+            }
+            val curOffset = sel.start
+            if (txt != prevText) {
+                prevText = txt
+                prevOffset = curOffset
+                dragSteps = 0
+                autoScrollDir = 0
+                currentOnValueChange(txt)
+                return@collect
+            }
+            if (curOffset == programmaticCursor) {
+                prevOffset = curOffset
+                return@collect
+            }
+            val diff = curOffset - prevOffset
+            prevOffset = curOffset
+            if (!sel.collapsed || diff == 0) {
+                if (!sel.collapsed) autoScrollDir = 0
+                return@collect
+            }
+            val dir = if (diff > 0) 1 else -1
+            if (kotlin.math.abs(diff) <= 6) {
+                dragSteps = if (dir == lastDir) dragSteps + 1 else 1
+                lastDir = dir
+            } else {
+                dragSteps = 0
+                lastDir = dir
+                autoScrollDir = 0
+                return@collect
+            }
+
+            val layout = layoutResult ?: return@collect
+            if (boxWidthPx <= 0 || scrollState.maxValue <= 0) return@collect
+            val rect = runCatching { layout.getCursorRect(curOffset.coerceIn(0, txt.length)) }.getOrNull() ?: return@collect
+            val cursorXInBox = rect.left - scrollState.value
+
+            if (dragSteps >= 2) {
+                if (dir > 0 && cursorXInBox >= boxWidthPx - edgeZonePx && curOffset < txt.length) {
+                    anchorXInBox = cursorXInBox.coerceIn(boxWidthPx - edgeZonePx, boxWidthPx.toFloat() - 2f)
+                    autoScrollDir = 1
+                } else if (dir < 0 && cursorXInBox <= edgeZonePx && curOffset > 0) {
+                    anchorXInBox = cursorXInBox.coerceIn(2f, edgeZonePx)
+                    autoScrollDir = -1
+                } else if (
+                    (autoScrollDir == 1 && (dir < 0 || cursorXInBox < boxWidthPx - edgeZonePx * 1.4f)) ||
+                    (autoScrollDir == -1 && (dir > 0 || cursorXInBox > edgeZonePx * 1.4f))
+                ) {
+                    autoScrollDir = 0
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(autoScrollDir) {
+        if (autoScrollDir == 0) return@LaunchedEffect
+        var floatScroll = scrollState.value.toFloat()
+        var lastNanos = 0L
+        while (autoScrollDir != 0) {
+            val dtSec = withFrameNanos { nanos ->
+                val dt = if (lastNanos == 0L) 0.016f else ((nanos - lastNanos) / 1_000_000_000f).coerceIn(0.004f, 0.05f)
+                lastNanos = nanos
+                dt
+            }
+            val layout = layoutResult ?: break
+            val maxScroll = scrollState.maxValue
+            if (maxScroll <= 0) {
+                autoScrollDir = 0
+                break
+            }
+            floatScroll = (floatScroll + autoScrollDir * scrollSpeedPxPerSec * dtSec).coerceIn(0f, maxScroll.toFloat())
+            val targetScrollInt = floatScroll.toInt()
+            if (targetScrollInt != scrollState.value) {
+                scrollState.scrollTo(targetScrollInt)
+            }
+            val txt = tfState.text.toString()
+            val cur = tfState.selection.start
+            val curRect = runCatching { layout.getCursorRect(cur.coerceIn(0, txt.length)) }.getOrNull()
+            val probeY = curRect?.center?.y ?: 10f
+            val targetTextX = if (autoScrollDir > 0 && targetScrollInt >= maxScroll) {
+                layout.size.width.toFloat()
+            } else if (autoScrollDir < 0 && targetScrollInt <= 0) {
+                0f
+            } else {
+                anchorXInBox + scrollState.value
+            }
+            val nextOffset = layout.getOffsetForPosition(Offset(targetTextX, probeY)).coerceIn(0, txt.length)
+            if (nextOffset != cur) {
+                programmaticCursor = nextOffset
+                tfState.edit { selection = TextRange(nextOffset) }
+            }
+            if ((autoScrollDir > 0 && targetScrollInt >= maxScroll && nextOffset >= txt.length) ||
+                (autoScrollDir < 0 && targetScrollInt <= 0 && nextOffset <= 0)
+            ) {
+                autoScrollDir = 0
+                break
+            }
+        }
+    }
+
+    BasicTextField(
+        state = tfState,
+        lineLimits = TextFieldLineLimits.SingleLine,
+        scrollState = scrollState,
+        textStyle = textStyle,
+        cursorBrush = cursorBrush,
+        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = imeAction),
+        onKeyboardAction = if (onImeAction != null) {
+            KeyboardActionHandler { currentOnImeAction?.invoke() }
+        } else null,
+        onTextLayout = { getResult -> layoutResult = getResult() },
+        modifier = modifier
+            .onSizeChanged { boxWidthPx = it.width }
+            .onFocusChanged { if (!it.isFocused) autoScrollDir = 0 },
+        decorator = { inner ->
+            Box(contentAlignment = Alignment.CenterStart) {
+                if (placeholder != null && tfState.text.isEmpty()) {
+                    Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = t.textFaint)
+                }
+                inner()
+            }
+        }
+    )
 }
 
 @Composable

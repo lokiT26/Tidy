@@ -418,31 +418,34 @@ My existing Tidy lists are: $listsStr (or omit "list" for Inbox, or name a new l
 
 RULES:
 1. Reply with ONLY a valid JSON object inside a ```json code block matching the schema below.
-2. Only generate what I ask for:
-   - If I ask for tasks/schedules/reminders, populate "tasks" and leave "notes": [].
-   - If I ask for notes or reference checklists, populate "notes" and leave "tasks": [].
-   - Only populate both "tasks" and "notes" if I ask for both or if a compact reference note directly supports the plan.
-3. Keep titles concise and actionable. Do not invent filler items. Only set "time" and "reminderMinutesBefore" when timing matters.
+2. Only generate what I ask for (tasks only, notes only, or a combination of both when appropriate).
+3. Choose the smartest structure for the specific request, context, and scenario:
+   - You have full flexibility across tasks, subtasks, details ("notes"), dates, times, reminders, repeat rules, priorities, lists, text notes, and checklist notes.
+   - Decide wisely how to organize the plan (when to split items into separate timed tasks vs. group steps as subtasks vs. use recurring tasks vs. attach a reference note/checklist) so the result feels practical, well-organized, and effortless to use.
+4. Keep text crisp and visually clean on mobile screens & home-screen widgets:
+   - Task "title": Short and scannable (2–7 words, under ~45 chars). Put extra details in "notes" or "subtasks".
+   - Each subtask: Concise and clear (under 15–16 words).
+   - Note "title": Short (1–5 words, under ~32 chars) so it fits cleanly on a 2-column grid card.
 
 SCHEMA:
 ```json
 {
   "tasks": [
     {
-      "title": "Task title (max 150 chars)",
-      "notes": "Optional details",
+      "title": "Short task title (2-7 words)",
+      "notes": "Optional context or details",
       "date": "YYYY-MM-DD (or null for Someday)",
       "time": "HH:mm (24h, e.g. 16:30, or null for All-day)",
       "reminderMinutesBefore": 15,
       "priority": "none | low | medium | high",
       "list": "Existing or new list name",
       "repeat": "NONE | DAILY | WEEKDAYS | WEEKLY | MONTHLY | YEARLY",
-      "subtasks": ["Optional step 1", "Optional step 2"]
+      "subtasks": ["Clear step under 15-16 words"]
     }
   ],
   "notes": [
     {
-      "title": "Note title",
+      "title": "Short note title (1-5 words)",
       "checklist": false,
       "content": "Text body for regular notes (omit if checklist is true)",
       "items": ["Checklist item 1", "Checklist item 2"],
