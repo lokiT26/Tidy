@@ -184,8 +184,20 @@ class Repository private constructor(private val context: Context) {
     }
 
     // ---------- Categories ----------
-    suspend fun saveCategory(c: Category) { if (c.id == 0L) dao.insertCategory(c) else dao.updateCategory(c); changed() }
+    suspend fun saveCategory(c: Category) {
+        if (c.id == 0L) {
+            val nextSort = (dao.allCategories().maxOfOrNull { it.sortOrder } ?: -1) + 1
+            dao.insertCategory(c.copy(sortOrder = nextSort))
+        } else {
+            dao.updateCategory(c)
+        }
+        changed()
+    }
     suspend fun deleteCategory(c: Category) { dao.clearCategory(c.id); dao.deleteCategory(c); changed() }
+    suspend fun reorderCategories(ordered: List<Category>) {
+        dao.updateCategories(ordered.mapIndexed { i, c -> c.copy(sortOrder = i) })
+        changed()
+    }
 
     // ---------- Notes ----------
     suspend fun saveNote(n: Note): Long {
@@ -264,18 +276,28 @@ class Repository private constructor(private val context: Context) {
 
         var nextTaskSort = dao.minSort() - 1
         for (draft in plan.tasks) {
-            val catId: Long? = if (draft.listName.isNullOrBlank() || draft.listName.equals("Inbox", ignoreCase = true)) {
+            val rawList = draft.listName?.trim().orEmpty()
+            val (extractedEmoji, cleanListName) = splitLeadingEmojiAndName(rawList)
+            val catId: Long? = if (cleanListName.isBlank() || cleanListName.equals("Inbox", ignoreCase = true)) {
                 null
             } else {
-                val found = existingCats.find { it.name.equals(draft.listName.trim(), ignoreCase = true) }
+                val found = existingCats.find { cat ->
+                    val (_, catCleanName) = splitLeadingEmojiAndName(cat.name)
+                    cat.name.equals(cleanListName, ignoreCase = true) ||
+                        catCleanName.equals(cleanListName, ignoreCase = true) ||
+                        cat.name.equals(rawList, ignoreCase = true) ||
+                        "${cat.emoji} ${cat.name}".trim().equals(rawList, ignoreCase = true)
+                }
                 if (found != null) {
                     found.id
                 } else {
+                    val chosenEmoji = draft.listEmoji.trim().ifBlank { extractedEmoji }.ifBlank { "📌" }
+                    val nextSort = (existingCats.maxOfOrNull { it.sortOrder } ?: -1) + 1
                     val newCat = Category(
-                        name = draft.listName.trim().take(28),
+                        name = cleanListName.take(28),
                         colorIndex = existingCats.size % 7,
-                        emoji = draft.listEmoji.ifBlank { "📌" },
-                        sortOrder = existingCats.size
+                        emoji = chosenEmoji,
+                        sortOrder = nextSort
                     )
                     val newCatId = dao.insertCategory(newCat)
                     existingCats.add(newCat.copy(id = newCatId))
@@ -410,11 +432,11 @@ class Repository private constructor(private val context: Context) {
 
         fun buildAiPrompt(categories: List<Category>, today: LocalDate = LocalDate.now()): String {
             val listsStr = if (categories.isEmpty()) "Personal, Work, Health"
-            else categories.joinToString(", ") { "${it.emoji} ${it.name}".trim() }
+            else categories.joinToString(", ") { splitLeadingEmojiAndName(it.name).second.ifBlank { it.name.trim() } }
             return """
 You are generating a structured plan for my Android app "Tidy" (To-Dos & Notes).
 Today's date is $today (${today.dayOfWeek.name.lowercase().replaceFirstChar { it.uppercase() }}).
-My existing Tidy lists are: $listsStr (or omit "list" for Inbox, or name a new list if needed).
+My existing Tidy lists are: $listsStr (use the exact list name without emoji to add to an existing list, omit "list" for Inbox, or name a new list with an optional "emoji" field if creating a new list).
 
 RULES:
 1. Reply with ONLY a valid JSON object inside a ```json code block matching the schema below.
@@ -438,7 +460,8 @@ SCHEMA:
       "time": "HH:mm (24h, e.g. 16:30, or null for All-day)",
       "reminderMinutesBefore": 15,
       "priority": "none | low | medium | high",
-      "list": "Existing or new list name",
+      "list": "Existing or new list name (plain text, e.g. Personal)",
+      "emoji": "Optional single emoji only when creating a NEW list",
       "repeat": "NONE | DAILY | WEEKDAYS | WEEKLY | MONTHLY | YEARLY",
       "subtasks": ["Clear step under 15-16 words"]
     }
@@ -458,6 +481,27 @@ SCHEMA:
 
 My request: 
 """.trimIndent()
+        }
+
+        /**
+         * Splits a string like "🌿 Personal" or "📌 🌿 Personal" into ("🌿", "Personal").
+         * If no leading emoji/symbol prefix is present (e.g. "Personal"), returns ("", "Personal").
+         */
+        fun splitLeadingEmojiAndName(raw: String): Pair<String, String> {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return "" to ""
+            var i = 0
+            while (i < trimmed.length) {
+                val cp = trimmed.codePointAt(i)
+                if (Character.isLetterOrDigit(cp)) break
+                i += Character.charCount(cp)
+            }
+            if (i == 0 || i >= trimmed.length) return "" to trimmed
+            val prefix = trimmed.substring(0, i).trim()
+            val name = trimmed.substring(i).trim()
+            // Take the last distinct emoji token if multiple were stacked (e.g. "📌 🌿" -> "🌿")
+            val singleEmoji = prefix.split(Regex("\\s+")).lastOrNull { it.isNotEmpty() }.orEmpty()
+            return singleEmoji to name
         }
 
         fun parseAiPlan(raw: String, today: LocalDate = LocalDate.now()): AiPlanDraft? = runCatching {

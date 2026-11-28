@@ -104,6 +104,7 @@ interface TidyDao {
     @Query("SELECT * FROM categories ORDER BY sortOrder, id") suspend fun allCategories(): List<Category>
     @Insert suspend fun insertCategory(c: Category): Long
     @Update suspend fun updateCategory(c: Category)
+    @Update suspend fun updateCategories(c: List<Category>)
     @Delete suspend fun deleteCategory(c: Category)
     @Query("UPDATE tasks SET categoryId = NULL WHERE categoryId = :id") suspend fun clearCategory(id: Long)
 

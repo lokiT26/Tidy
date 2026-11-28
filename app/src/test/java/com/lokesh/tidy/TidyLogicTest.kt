@@ -259,4 +259,12 @@ class TidyLogicTest {
         assertFalse(converted.subtasks[1].done)
         assertEquals("Pack bag", converted.subtasks[1].title)
     }
+
+    @Test
+    fun splitLeadingEmojiAndName_extractsEmojiAndCleanListName() {
+        assertEquals("" to "Personal", Repository.splitLeadingEmojiAndName("Personal"))
+        assertEquals("🌿" to "Personal", Repository.splitLeadingEmojiAndName("🌿 Personal"))
+        assertEquals("🌿" to "Personal", Repository.splitLeadingEmojiAndName("📌 🌿 Personal"))
+        assertEquals("🍎" to "Diet Plan", Repository.splitLeadingEmojiAndName("🍎 Diet Plan"))
+    }
 }

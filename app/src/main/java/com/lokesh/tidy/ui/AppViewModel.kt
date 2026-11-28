@@ -30,6 +30,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun reorder(list: List<Task>) = viewModelScope.launch { repo.reorder(list) }
     fun saveCategory(c: Category) = viewModelScope.launch { repo.saveCategory(c) }
     fun deleteCategory(c: Category) = viewModelScope.launch { repo.deleteCategory(c) }
+    fun reorderCategories(list: List<Category>) = viewModelScope.launch { repo.reorderCategories(list) }
     fun saveNote(n: Note, onId: (Long) -> Unit = {}) = viewModelScope.launch { onId(repo.saveNote(n)) }
     fun deleteNote(n: Note) = viewModelScope.launch { repo.deleteNote(n) }
     fun restoreNote(n: Note) = viewModelScope.launch { repo.saveNote(n.copy(id = 0)) }

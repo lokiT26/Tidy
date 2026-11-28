@@ -227,11 +227,11 @@ class TodoWidget : GlanceAppWidget() {
                     -2L -> t.dueDate != null && t.dueDate <= today
                     -3L -> t.dueDate == today
                     -4L -> t.dueDate == today || t.dueDate == null
-                    -5L -> t.dueDate != null && t.dueDate > today
+                    -5L -> t.dueDate != null && t.dueDate in (today + 1)..(today + 7)
                     -6L -> t.dueDate == null
                     else -> t.categoryId == cfg.listFilter
                 }
-                matchList && (cfg.showCompleted || !t.completed)
+                matchList && (!t.completed || (cfg.showCompleted && isToday(t.completedAt)))
             }.sortedWith(
                 compareBy<TaskWithSubtasks> { it.task.completed }
                     .thenBy {

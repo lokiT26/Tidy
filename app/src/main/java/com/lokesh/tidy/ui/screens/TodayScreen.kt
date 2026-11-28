@@ -72,6 +72,8 @@ fun TodayScreen(
     val today = Dates.today()
     val catMap = remember(categories) { categories.associateBy { it.id } }
     var showCompleted by rememberSaveable { mutableStateOf(false) }
+    var showAllOverdue by rememberSaveable { mutableStateOf(false) }
+    var showAllUpcoming by rememberSaveable { mutableStateOf(false) }
 
     val filtered = remember(tasks, selectedCategory) { if (selectedCategory == null) tasks else tasks.filter { it.task.categoryId == selectedCategory } }
 
@@ -89,21 +91,26 @@ fun TodayScreen(
         lastRatio = r
     }
 
-    val computed: List<Row> = remember(filtered, showCompleted) {
+    val computed: List<Row> = remember(filtered, showCompleted, showAllOverdue, showAllUpcoming) {
         val open = filtered.filter { !it.task.completed }
         val overdue = open.filter { it.task.dueDate != null && it.task.dueDate < today }.sortedWith(compareBy({ it.task.dueDate }, { it.task.sortOrder }))
         val todays = open.filter { it.task.dueDate == today }.sortedWith(compareBy({ it.task.sortOrder }))
-        val upcoming = open.filter { it.task.dueDate != null && it.task.dueDate > today }.sortedWith(compareBy({ it.task.dueDate }, { it.task.sortOrder }))
+        val upcoming = open.filter { it.task.dueDate != null && it.task.dueDate in (today + 1)..(today + 7) }.sortedWith(compareBy({ it.task.dueDate }, { it.task.sortOrder }))
         val someday = open.filter { it.task.dueDate == null }.sortedBy { it.task.sortOrder }
-        val done = filtered.filter { it.task.completed }
+        val done = filtered.filter { it.task.completed && isToday(it.task.completedAt) }
             .sortedWith(compareByDescending<TaskWithSubtasks> { it.task.completedAt ?: 0L }.thenByDescending { it.task.id })
-            .take(50)
         buildList {
-            if (overdue.isNotEmpty()) { add(HeaderRow("overdue", "Overdue", overdue.size, Palette.danger)); overdue.forEach { add(TaskRow("overdue", it)) } }
+            if (overdue.isNotEmpty()) {
+                add(HeaderRow("overdue", "Overdue", overdue.size, Palette.danger))
+                (if (showAllOverdue) overdue else overdue.take(3)).forEach { add(TaskRow("overdue", it)) }
+            }
             add(HeaderRow("today", "Today", todays.size)); todays.forEach { add(TaskRow("today", it)) }
-            if (upcoming.isNotEmpty()) { add(HeaderRow("upcoming", "Upcoming", upcoming.size)); upcoming.forEach { add(TaskRow("upcoming", it)) } }
+            if (upcoming.isNotEmpty()) {
+                add(HeaderRow("upcoming", "Upcoming", upcoming.size))
+                (if (showAllUpcoming) upcoming else upcoming.take(3)).forEach { add(TaskRow("upcoming", it)) }
+            }
             if (someday.isNotEmpty()) { add(HeaderRow("someday", "Someday", someday.size)); someday.forEach { add(TaskRow("someday", it)) } }
-            if (done.isNotEmpty()) { add(HeaderRow("done", "Completed", done.size)); if (showCompleted) done.forEach { add(TaskRow("done", it)) } }
+            if (done.isNotEmpty()) { add(HeaderRow("done", "Completed today", done.size)); if (showCompleted) done.forEach { add(TaskRow("done", it)) } }
         }
     }
     var rows by remember { mutableStateOf(computed) }
@@ -196,6 +203,24 @@ fun TodayScreen(
                             SectionHeader(row.title, row.count) {
                                 Text(if (showCompleted) "Hide" else "Show", style = MaterialTheme.typography.labelMedium, color = t.accentStrong,
                                     modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showCompleted = !showCompleted }.padding(horizontal = 8.dp, vertical = 2.dp))
+                            }
+                        } else if (row.section == "overdue" && row.count > 3) {
+                            SectionHeader(row.title, row.count, row.color ?: t.textMuted) {
+                                Text(
+                                    if (showAllOverdue) "Show less" else "Show all (${row.count})",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Palette.danger,
+                                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showAllOverdue = !showAllOverdue }.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
+                            }
+                        } else if (row.section == "upcoming" && row.count > 3) {
+                            SectionHeader(row.title, row.count, row.color ?: t.textMuted) {
+                                Text(
+                                    if (showAllUpcoming) "Show less" else "Show all (${row.count})",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = t.accentStrong,
+                                    modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showAllUpcoming = !showAllUpcoming }.padding(horizontal = 8.dp, vertical = 2.dp)
+                                )
                             }
                         } else if (row.section == "today" && row.count == 0) {
                             Column {

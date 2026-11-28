@@ -4,6 +4,33 @@ Tracks UX issues, edge cases, and fixes across versions.
 
 ---
 
+## Resolved in `v1.7.3`
+
+### 1. [Fixed] AI Plan Import List Name & Leading Emoji Matching
+- **Location:** `app/src/main/java/com/lokesh/tidy/data/Repository.kt` (`splitLeadingEmojiAndName`, `importAiPlan`, `buildAiPrompt`)
+- **Resolution:**
+  - `buildAiPrompt` now lists clean category names without prepending emojis into the name string.
+  - `importAiPlan` splits any leading emoji prefix from the list name (`splitLeadingEmojiAndName`) so `"🌿 Personal"` and `"Personal"` both match the existing `🌿 Personal` list instead of creating a duplicate `📌 🌿 Personal` list, and new lists with leading emojis (e.g. `"🍎 Diet"`) extract `"🍎"` into `Category.emoji` and `"Diet"` into `Category.name`.
+
+### 2. [Fixed] Batch List Selector & Rename Option in AI Import Preview
+- **Location:** `app/src/main/java/com/lokesh/tidy/ui/screens/SettingsScreen.kt` (`AiPlanImportSheet`)
+- **Resolution:**
+  - When all tasks in an imported AI plan share the same list name, a **`LIST FOR ALL TASKS`** pill selector appears above the tasks preview so the user can reassign the entire batch to `Inbox`, any existing list, or edit the AI's suggested new list name/emoji before importing.
+
+### 3. [Fixed] `done/total` Task Completion Count & Drag-to-Reorder in `Settings → Lists`
+- **Location:** `app/src/main/java/com/lokesh/tidy/ui/screens/SettingsScreen.kt`, `Repository.kt`, `Model.kt`
+- **Resolution:**
+  - Each list row in `Settings → Lists` now displays a `done/total` badge (`x/y`) beside the list name.
+  - Added long-press vertical drag-to-reorder on the list rows inside `Settings → Lists` (`vm.reorderCategories`), automatically updating the order of the horizontal capsules on `Today`, the `By list` progress card in `Insights`, and the `Task Editor`.
+
+### 4. [Fixed] Smart Caps & `"Completed today"` Window on `Today` Screen
+- **Location:** `app/src/main/java/com/lokesh/tidy/ui/screens/TodayScreen.kt`
+- **Resolution:**
+  - `Overdue` and `Upcoming` (next 7 days) now show up to 3 tasks by default with an inline `Show all (N)` / `Show less` toggle in the section header.
+  - `Completed today` on the Today screen now shows only tasks completed today (while preserving 100% permanent database history of all completed tasks for Insights, Calendar, and Search).
+
+---
+
 ## Resolved in `v1.7.1`
 
 ### 1. [Fixed] AI Plan Prompt Guidance for Smart Structural Decisions & Mobile-Friendly Lengths

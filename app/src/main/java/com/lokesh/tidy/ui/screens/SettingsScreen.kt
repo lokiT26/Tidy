@@ -15,6 +15,7 @@ import android.widget.Toast
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,7 +23,10 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,15 +42,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import com.lokesh.tidy.data.AiPlanDraft
 import com.lokesh.tidy.data.AiUndoSummary
@@ -70,9 +81,18 @@ import java.time.LocalDate
 fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>, onEditCategory: (Category?) -> Unit, onBack: () -> Unit) {
     val t = tidy
     val ctx = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
+    val allTasks by vm.tasks.collectAsStateWithLifecycle()
     BackHandler(onBack = onBack)
     var name by remember(s.name) { mutableStateOf(s.name) }
+    var localCategories by remember { mutableStateOf(categories) }
+    var draggingCatId by remember { mutableStateOf<Long?>(null) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var catRowHeightPx by remember { mutableFloatStateOf(130f) }
+    LaunchedEffect(categories, draggingCatId) {
+        if (draggingCatId == null) localCategories = categories
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) scope.launch {
@@ -178,8 +198,93 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
         }
 
         Group("Lists") {
-            categories.forEach { c ->
-                Item(null, "${c.emoji}  ${c.name}", null, dot = Palette.vivid.getOrElse(c.colorIndex) { Palette.vivid[0] }) { onEditCategory(c) }
+            localCategories.forEach { c ->
+                key(c.id) {
+                    val catTasks = remember(allTasks, c.id) { allTasks.filter { it.task.categoryId == c.id } }
+                    val doneCount = remember(catTasks) { catTasks.count { it.task.completed } }
+                    val isDragging = draggingCatId == c.id
+                    val dotColor = Palette.vivid.getOrElse(c.colorIndex) { Palette.vivid[0] }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .zIndex(if (isDragging) 1f else 0f)
+                            .graphicsLayer {
+                                translationY = if (isDragging) dragOffsetY else 0f
+                                scaleX = if (isDragging) 1.02f else 1f
+                                scaleY = if (isDragging) 1.02f else 1f
+                            }
+                            .then(if (isDragging) Modifier.shadow(10.dp, RoundedCornerShape(16.dp)).background(t.card, RoundedCornerShape(16.dp)) else Modifier)
+                            .onSizeChanged { if (it.height > 0) catRowHeightPx = it.height.toFloat() }
+                            .clickable { onEditCategory(c) }
+                            .pointerInput(c.id) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        draggingCatId = c.id
+                                        dragOffsetY = 0f
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    },
+                                    onDragEnd = {
+                                        draggingCatId = null
+                                        dragOffsetY = 0f
+                                        vm.reorderCategories(localCategories)
+                                    },
+                                    onDragCancel = {
+                                        draggingCatId = null
+                                        dragOffsetY = 0f
+                                        vm.reorderCategories(localCategories)
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        dragOffsetY += dragAmount.y
+                                        val curIdx = localCategories.indexOfFirst { it.id == c.id }
+                                        val step = catRowHeightPx.coerceAtLeast(80f)
+                                        if (curIdx >= 0) {
+                                            if (dragOffsetY > step * 0.65f && curIdx < localCategories.lastIndex) {
+                                                localCategories = localCategories.toMutableList().apply {
+                                                    add(curIdx + 1, removeAt(curIdx))
+                                                }
+                                                dragOffsetY -= step
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            } else if (dragOffsetY < -step * 0.65f && curIdx > 0) {
+                                                localCategories = localCategories.toMutableList().apply {
+                                                    add(curIdx - 1, removeAt(curIdx))
+                                                }
+                                                dragOffsetY += step
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(Modifier.size(10.dp).clip(CircleShape).background(dotColor))
+                        Spacer(Modifier.width(14.dp))
+                        Row(
+                            modifier = Modifier.weight(1f),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("${c.emoji}  ${c.name}", style = MaterialTheme.typography.titleSmall, color = t.text)
+                            Spacer(Modifier.width(8.dp))
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(t.cardAlt)
+                                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    "$doneCount/${catTasks.size}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = t.textMuted
+                                )
+                            }
+                        }
+                        Icon(Icons.Rounded.DragIndicator, "Hold & drag to reorder", tint = t.textFaint, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Icon(Icons.Rounded.ChevronRight, null, tint = t.textFaint)
+                    }
+                }
             }
             Item(Icons.Rounded.Add, "New list", null) { onEditCategory(null) }
         }
@@ -469,7 +574,28 @@ fun AiPlanImportSheet(
     val scope = rememberCoroutineScope()
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var previewDraft by remember(initialDraft) { mutableStateOf(initialDraft) }
+    var uniformListOrigin by remember(initialDraft) {
+        mutableStateOf(
+            initialDraft?.tasks?.takeIf { list ->
+                list.isNotEmpty() && list.map { Repository.splitLeadingEmojiAndName(it.listName.orEmpty()).second.lowercase() }.distinct().size == 1
+            }?.first()?.let { first ->
+                val (extEmoji, cleanName) = Repository.splitLeadingEmojiAndName(first.listName.orEmpty())
+                cleanName to (first.listEmoji.ifBlank { extEmoji })
+            }
+        )
+    }
+    var showRenameAiListDialog by remember { mutableStateOf(false) }
     val lastUndo = remember(s.lastAiImportBatch) { AiUndoSummary.fromJson(s.lastAiImportBatch) }
+
+    fun loadNewPreview(parsed: AiPlanDraft) {
+        previewDraft = parsed
+        uniformListOrigin = parsed.tasks.takeIf { list ->
+            list.isNotEmpty() && list.map { Repository.splitLeadingEmojiAndName(it.listName.orEmpty()).second.lowercase() }.distinct().size == 1
+        }?.first()?.let { first ->
+            val (extEmoji, cleanName) = Repository.splitLeadingEmojiAndName(first.listName.orEmpty())
+            cleanName to (first.listEmoji.ifBlank { extEmoji })
+        }
+    }
 
     val aiFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -481,7 +607,7 @@ fun AiPlanImportSheet(
                     }
                 }.getOrNull()
                 if (parsed != null) {
-                    previewDraft = parsed
+                    loadNewPreview(parsed)
                 } else {
                     Toast.makeText(ctx, "Couldn't find a valid Tidy AI plan in that file", Toast.LENGTH_SHORT).show()
                 }
@@ -538,6 +664,82 @@ fun AiPlanImportSheet(
                 Spacer(Modifier.height(12.dp))
 
                 if (draft.tasks.isNotEmpty()) {
+                    val uniformOrigin = uniformListOrigin
+                    if (uniformOrigin != null) {
+                        val curRaw = draft.tasks.firstOrNull()?.listName.orEmpty()
+                        val curClean = Repository.splitLeadingEmojiAndName(curRaw).second
+                        val isInbox = curClean.isBlank() || curClean.equals("Inbox", ignoreCase = true)
+                        val (origClean, origEmoji) = uniformOrigin
+                        val origMatchesExisting = origClean.isBlank() ||
+                            origClean.equals("Inbox", ignoreCase = true) ||
+                            categories.any { Repository.splitLeadingEmojiAndName(it.name).second.equals(origClean, ignoreCase = true) || it.name.equals(origClean, ignoreCase = true) }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("LIST FOR ALL TASKS", style = MaterialTheme.typography.labelSmall, color = t.textMuted)
+                            if (!origMatchesExisting) {
+                                Text(
+                                    "Rename new list",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = t.accentStrong,
+                                    modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable { showRenameAiListDialog = true }.padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            item {
+                                OptionPill("Inbox", Icons.Rounded.Inbox, isInbox) {
+                                    previewDraft = draft.copy(tasks = draft.tasks.map { it.copy(listName = null, listEmoji = "") })
+                                }
+                            }
+                            if (!origMatchesExisting) {
+                                item {
+                                    val sel = !isInbox && curClean.equals(origClean, ignoreCase = true)
+                                    val dispEmoji = origEmoji.ifBlank { "📌" }
+                                    Row(
+                                        Modifier
+                                            .clip(RoundedCornerShape(50))
+                                            .background(if (sel) t.accentStrong else t.cardAlt)
+                                            .clickable {
+                                                previewDraft = draft.copy(tasks = draft.tasks.map { it.copy(listName = origClean, listEmoji = dispEmoji) })
+                                            }
+                                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "✨ $dispEmoji $origClean".trim(),
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (sel) (if (t.dark) Color(0xFF121214) else Color.White) else t.text
+                                        )
+                                    }
+                                }
+                            }
+                            items(categories) { c ->
+                                val cClean = Repository.splitLeadingEmojiAndName(c.name).second.ifBlank { c.name }
+                                val sel = !isInbox && (curClean.equals(cClean, ignoreCase = true) || curClean.equals(c.name, ignoreCase = true))
+                                val col = Palette.vivid.getOrElse(c.colorIndex) { Palette.vivid[0] }
+                                Row(
+                                    Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(if (sel) col.copy(alpha = 0.22f) else t.cardAlt)
+                                        .border(1.5.dp, if (sel) col else Color.Transparent, RoundedCornerShape(50))
+                                        .clickable {
+                                            previewDraft = draft.copy(tasks = draft.tasks.map { it.copy(listName = c.name, listEmoji = c.emoji) })
+                                        }
+                                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("${c.emoji} ${c.name}".trim(), style = MaterialTheme.typography.labelLarge, color = t.text)
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                    }
+
                     Text("TASKS (${draft.tasks.size})", style = MaterialTheme.typography.labelSmall, color = t.textMuted)
                     Spacer(Modifier.height(6.dp))
                     draft.tasks.take(12).forEach { td ->
@@ -673,7 +875,7 @@ fun AiPlanImportSheet(
                                 val text = cm.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString().orEmpty()
                                 val parsed = Repository.parseAiPlan(text)
                                 if (parsed != null) {
-                                    previewDraft = parsed
+                                    loadNewPreview(parsed)
                                 } else {
                                     Toast.makeText(ctx, "No Tidy AI plan found in clipboard", Toast.LENGTH_SHORT).show()
                                 }
@@ -727,6 +929,52 @@ fun AiPlanImportSheet(
                 }
             }
         }
+    }
+
+    if (showRenameAiListDialog && uniformListOrigin != null && previewDraft != null) {
+        val (origClean, origEmoji) = uniformListOrigin!!
+        var editName by remember(origClean) { mutableStateOf(origClean) }
+        var editEmoji by remember(origEmoji) { mutableStateOf(origEmoji.ifBlank { "📌" }) }
+        AlertDialog(
+            onDismissRequest = { showRenameAiListDialog = false },
+            containerColor = t.card,
+            shape = RoundedCornerShape(28.dp),
+            title = { Text("Edit new list", style = MaterialTheme.typography.titleLarge, color = t.text) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = editEmoji,
+                        onValueChange = { if (it.length <= 4) editEmoji = it.trim() },
+                        singleLine = true,
+                        label = { Text("Emoji") },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editName,
+                        onValueChange = { if (it.length <= 28) editName = it },
+                        singleLine = true,
+                        label = { Text("List name") },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val clean = editName.trim().ifBlank { origClean }
+                    val em = editEmoji.trim().ifBlank { "📌" }
+                    uniformListOrigin = clean to em
+                    previewDraft = previewDraft?.let { d ->
+                        d.copy(tasks = d.tasks.map { it.copy(listName = clean, listEmoji = em) })
+                    }
+                    showRenameAiListDialog = false
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameAiListDialog = false }) { Text("Cancel") }
+            }
+        )
     }
 }
 
