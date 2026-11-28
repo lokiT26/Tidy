@@ -1,0 +1,19 @@
+name: 🐞 Report a Bug
+description: Let us know if something isn't working right (takes 10 seconds)
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: details
+    attributes:
+      label: What happened?
+      description: Just a short sentence or two is enough.
+      placeholder: "Example: When I tap X on the Notes screen, Y happens..."
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: App & Device Info (optional)
+      description: "Pre-filled with your Tidy version, Android version, and phone model to help debug the issue faster (feel free to edit or clear)."
+      placeholder: "Tidy version, Android version, phone model"

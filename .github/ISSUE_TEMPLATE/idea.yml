@@ -1,0 +1,13 @@
+name: 💡 Suggest an Idea
+description: Share a feature idea or improvement for Tidy
+title: "[Idea] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: details
+    attributes:
+      label: What's your idea or feedback?
+      description: Keep it simple — one or two lines is plenty!
+      placeholder: "I'd love it if Tidy could..."
+    validations:
+      required: true

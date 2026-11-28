@@ -8,6 +8,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.widget.Toast
@@ -36,9 +37,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -83,6 +88,7 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
     }
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     var showAiImportSheet by remember { mutableStateOf(false) }
+    var showContactDialog by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding().padding(horizontal = 18.dp).padding(top = 12.dp, bottom = 60.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -236,8 +242,58 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
             Item(Icons.Rounded.CloudDownload, "Restore backup", "Replaces current data") { importLauncher.launch(arrayOf("application/json", "*/*")) }
         }
 
-        val pkgVersion = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "1.7" }
-        Text("Tidy $pkgVersion · 100% offline", style = MaterialTheme.typography.labelSmall, color = t.textFaint, modifier = Modifier.fillMaxWidth().padding(top = 16.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        val pkgVersion = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "1.7.2" }
+        val footerTextColor = t.textMuted.copy(alpha = 0.80f)
+        val separatorDotColor = t.accentStrong.copy(alpha = if (t.dark) 0.90f else 0.82f)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 6.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Tidy $pkgVersion",
+                style = MaterialTheme.typography.labelSmall,
+                color = footerTextColor
+            )
+            Box(
+                Modifier
+                    .padding(horizontal = 8.dp)
+                    .size(3.5.dp)
+                    .clip(CircleShape)
+                    .background(separatorDotColor)
+            )
+            Text(
+                "100% offline",
+                style = MaterialTheme.typography.labelSmall,
+                color = footerTextColor
+            )
+            Box(
+                Modifier
+                    .padding(horizontal = 8.dp)
+                    .size(3.5.dp)
+                    .clip(CircleShape)
+                    .background(separatorDotColor)
+            )
+            Text(
+                text = "Contact & feedback",
+                style = MaterialTheme.typography.labelSmall,
+                color = footerTextColor,
+                modifier = Modifier
+                    .clickable { showContactDialog = true }
+                    .padding(bottom = 3.dp)
+                    .drawBehind {
+                        val y = size.height + 1.5.dp.toPx()
+                        drawLine(
+                            color = footerTextColor.copy(alpha = 0.72f),
+                            start = Offset(1.dp.toPx(), y),
+                            end = Offset(size.width - 1.dp.toPx(), y),
+                            strokeWidth = 1.5.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(0.3.dp.toPx(), 3.6.dp.toPx()), 0f)
+                        )
+                    }
+            )
+        }
     }
 
     if (showAiImportSheet) {
@@ -248,6 +304,154 @@ fun SettingsScreen(vm: AppViewModel, s: AppSettings, categories: List<Category>,
             initialDraft = null,
             onDismiss = { showAiImportSheet = false }
         )
+    }
+    if (showContactDialog) {
+        val pkgVersion = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "1.7.2" }
+        ContactFeedbackDialog(
+            pkgVersion = pkgVersion,
+            onDismiss = { showContactDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun ContactFeedbackDialog(
+    pkgVersion: String,
+    onDismiss: () -> Unit,
+) {
+    val t = tidy
+    val ctx = LocalContext.current
+    val deviceInfo = remember(pkgVersion) {
+        "Tidy $pkgVersion · Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT}) · ${Build.MANUFACTURER} ${Build.MODEL}"
+    }
+    fun openUrl(url: String) {
+        runCatching {
+            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        }.onFailure {
+            Toast.makeText(ctx, "Couldn't open browser", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val bugColor = if (t.dark) Color(0xFFFF6B6B) else Color(0xFFE5484D)
+    val ideaColor = if (t.dark) Color(0xFFFFA94D) else Color(0xFFE67700)
+    val starColor = if (t.dark) Color(0xFFFFD43B) else Color(0xFFD99B00)
+    val releaseColor = if (t.dark) Color(0xFF3DD68C) else Color(0xFF189A5E)
+    val shareColor = if (t.dark) Color(0xFF66A8FF) else Color(0xFF1C7ED6)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = t.card,
+        shape = RoundedCornerShape(28.dp),
+        title = {
+            Column {
+                Text("Contact & feedback", style = MaterialTheme.typography.titleLarge, color = t.text)
+                Spacer(Modifier.height(2.dp))
+                Text("Tidy v$pkgVersion · 100% offline", style = MaterialTheme.typography.labelSmall, color = t.accentStrong)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ContactOptionRow(
+                    icon = Icons.Rounded.BugReport,
+                    iconColor = bugColor,
+                    title = "Report a bug",
+                    subtitle = "Found something broken or unexpected?"
+                ) {
+                    onDismiss()
+                    val encDevice = Uri.encode(deviceInfo)
+                    openUrl("https://github.com/lokiT26/Tidy/issues/new?template=bug.yml&title=%5BBug%5D+&device=$encDevice")
+                }
+                ContactOptionRow(
+                    icon = Icons.Rounded.Lightbulb,
+                    iconColor = ideaColor,
+                    title = "Suggest an idea",
+                    subtitle = "Share a feature request or feedback"
+                ) {
+                    onDismiss()
+                    openUrl("https://github.com/lokiT26/Tidy/issues/new?template=idea.yml&title=%5BIdea%5D+")
+                }
+                ContactOptionRow(
+                    icon = Icons.Rounded.Star,
+                    iconColor = starColor,
+                    title = "Star Tidy on GitHub",
+                    subtitle = "Help others discover Tidy"
+                ) {
+                    onDismiss()
+                    openUrl("https://github.com/lokiT26/Tidy")
+                }
+                ContactOptionRow(
+                    icon = Icons.Rounded.NewReleases,
+                    iconColor = releaseColor,
+                    title = "Releases & updates",
+                    subtitle = "Current: v$pkgVersion · Check latest APK"
+                ) {
+                    onDismiss()
+                    openUrl("https://github.com/lokiT26/Tidy/releases/latest")
+                }
+                ContactOptionRow(
+                    icon = Icons.Rounded.Share,
+                    iconColor = shareColor,
+                    title = "Share Tidy",
+                    subtitle = "Send download link to a friend"
+                ) {
+                    onDismiss()
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(
+                            Intent.EXTRA_TEXT,
+                            "Check out Tidy — a fast, minimal, 100% offline To-Do, Notes & Widgets app for Android: https://github.com/lokiT26/Tidy"
+                        )
+                    }
+                    runCatching { ctx.startActivity(Intent.createChooser(shareIntent, "Share Tidy")) }
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "Note: A GitHub account is required to submit issues, ideas, or star the repo (downloading updates from Releases does not require an account).",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = t.textMuted,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+@Composable
+private fun ContactOptionRow(
+    icon: ImageVector,
+    iconColor: Color,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    val t = tidy
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(t.cardAlt)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(34.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(iconColor.copy(alpha = if (t.dark) 0.18f else 0.13f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, null, tint = iconColor, modifier = Modifier.size(18.dp))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, color = t.text)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = t.textMuted)
+        }
+        Icon(Icons.Rounded.ChevronRight, null, tint = t.textFaint, modifier = Modifier.size(18.dp))
     }
 }
 

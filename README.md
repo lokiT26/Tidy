@@ -1,6 +1,8 @@
 # Tidy — Minimal To-Dos, Notes & Widgets for Android
 
 [![Latest Release](https://img.shields.io/github/v/release/lokiT26/Tidy?label=Download%20APK&color=7c6af6)](https://github.com/lokiT26/Tidy/releases/latest)
+[![Total Downloads](https://img.shields.io/github/downloads/lokiT26/Tidy/total?label=Total%20Downloads&color=10b981)](https://github.com/lokiT26/Tidy/releases)
+[![APK Size](https://img.shields.io/badge/APK%20Size-~3.1%20MB-0ea5e9)](https://github.com/lokiT26/Tidy/releases/latest)
 [![GitHub Stars](https://img.shields.io/github/stars/lokiT26/Tidy?style=flat&color=f59e0b)](https://github.com/lokiT26/Tidy/stargazers)
 [![License: MIT](https://img.shields.io/github/license/lokiT26/Tidy?color=34d399)](LICENSE)
 ![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white)
@@ -68,7 +70,7 @@
 
 ## Download
 
-Grab the latest signed APK from [**GitHub Releases**](https://github.com/lokiT26/Tidy/releases/latest) (supports in-place upgrades and [Obtainium](https://obtainium.imranr.dev/)).
+Grab the latest signed APK from [**GitHub Releases**](https://github.com/lokiT26/Tidy/releases/latest) (supports in-place upgrades and [Obtainium](https://apps.obtainium.imranr.dev/redirect?r=obtainium://add/https://github.com/lokiT26/Tidy)).
 
 ## Features
 
